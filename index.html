@@ -1,0 +1,1095 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https: ttsfile:; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: chatimg: musicfile: https:; media-src 'self' data: ttsfile: musicfile: https: http:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'">
+<title>便签</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="window" id="window">
+    <!-- 标题栏 -->
+    <div class="titlebar">
+        <div class="titlebar-center" role="tablist" aria-label="主导航">
+            <button class="tab active" data-tab="notes" role="tab" aria-selected="true" aria-controls="tab-notes" tabindex="0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>便签</button>
+            <button class="tab" data-tab="clock" role="tab" aria-selected="false" aria-controls="tab-clock" tabindex="-1"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>闹钟</button>
+            <button class="tab" data-tab="calendar" role="tab" aria-selected="false" aria-controls="tab-calendar" tabindex="-1"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>日历</button>
+            <button class="tab" data-tab="chat" role="tab" aria-selected="false" aria-controls="tab-chat" tabindex="-1"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>聊天</button>
+            <button class="tab" data-tab="create" role="tab" aria-selected="false" aria-controls="tab-create" tabindex="-1"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>创作</button>
+            <button class="tab" data-tab="tts" role="tab" aria-selected="false" aria-controls="tab-tts" tabindex="-1"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>语音</button>
+            <button class="tab" data-tab="music" role="tab" aria-selected="false" aria-controls="tab-music" tabindex="-1"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>音乐</button>
+            <button class="tab" data-tab="translate" role="tab" aria-selected="false" aria-controls="tab-translate" tabindex="-1"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M4 5h7"/><path d="M7 4c0 4.418-2.239 8-5 8"/><path d="M5 8c0 2.5 2.5 4.5 5 5"/><path d="M12 19l4-9 4 9"/><path d="M13.5 16h5"/></svg>翻译</button>
+        </div>
+        <div class="titlebar-actions">
+            <button class="titlebar-btn" id="settingsBtn" title="软件设置" aria-label="软件设置"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+            <button class="titlebar-btn" id="fixedBtn" title="固定窗口位置" aria-label="固定窗口位置"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><circle cx="12" cy="5" r="3"/><line x1="12" y1="22" x2="12" y2="8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></svg></button>
+            <button class="titlebar-btn pin-btn" id="pinBtn" title="窗口置顶" aria-label="窗口置顶"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg></button>
+            <button class="titlebar-btn lock-btn" id="lockBtn" title="软件锁（4 位 PIN）" aria-label="软件锁"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
+            <button class="titlebar-btn" id="minBtn" title="最小化到托盘" aria-label="最小化到托盘"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
+            <button class="titlebar-btn" id="maxBtn" title="最大化/还原" aria-label="最大化或还原"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1.5"/></svg></button>
+            <button class="titlebar-btn close-btn" id="closeBtn" title="关闭" aria-label="关闭窗口"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <!-- 软件设置三级面板 -->
+        <div class="popup-panel settings-panel" id="settingsPanel">
+            <div class="settings-panel-inner">
+                <button class="settings-item" id="settingsAiBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+                    <span>AI 设置</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+                <button class="settings-item" id="settingsOpacityBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
+                    <span>透明度</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+                <button class="settings-item" id="settingsAlarmVolumeBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                    <span>闹钟音量</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+                <button class="settings-item" id="settingsStartupBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+                    <span>开机启动</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+                <button class="settings-item" id="settingsPaletteBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><circle cx="13.5" cy="6.5" r="0.5" fill="currentColor"/><circle cx="17.5" cy="10.5" r="0.5" fill="currentColor"/><circle cx="8.5" cy="7.5" r="0.5" fill="currentColor"/><circle cx="6.5" cy="12.5" r="0.5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.83-.44-1.12-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.56-2.5 5.56-5.55C21.97 6.01 17.46 2 12 2z"/></svg>
+                    <span>背景颜色</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+                <button class="settings-item" id="settingsSyncBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <span>数据同步</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+                <button class="settings-item" id="settingsFontBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+                    <span>字体大小</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+                <button class="settings-item" id="settingsFmBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M20.49 3.51a12 12 0 0 1 0 16.97"/><path d="M3.51 20.49a12 12 0 0 1 0-16.97"/></svg>
+                    <span>FM 收音机</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+            </div>
+        </div>
+        <!-- 透明度三级面板 -->
+        <div class="popup-panel opacity-panel" id="opacityPanel">
+            <div class="op-label">窗口透明度</div>
+            <div class="op-row">
+                <input type="range" id="opacitySlider" min="20" max="100" value="100" aria-label="窗口透明度">
+                <span class="op-value" id="opacityValue">100%</span>
+            </div>
+        </div>
+        <!-- 闹钟音量三级面板（仿透明度面板风格，支持 0-300% 增益放大） -->
+        <div class="popup-panel opacity-panel" id="alarmVolumePanel">
+            <div class="op-label">闹钟音量（可放大至 300%）</div>
+            <div class="op-row">
+                <input type="range" id="alarmVolumeSlider" min="0" max="300" value="100" aria-label="闹钟音量">
+                <span class="op-value" id="alarmVolumeValue">100%</span>
+            </div>
+        </div>
+
+        <!-- 便签历史版本面板（后悔药）：列出最近的历史快照，点击恢复 -->
+        <div class="popup-panel history-panel" id="noteHistoryPanel">
+            <div class="op-label">📋 历史版本（点击恢复）</div>
+            <div class="history-list" id="noteHistoryList"></div>
+        </div>
+        <!-- 背景色三级面板 -->
+        <div class="popup-panel palette-panel" id="palettePanel">
+            <div class="pal-label">选择背景色</div>
+            <div class="palette-grid" id="paletteGrid"></div>
+        </div>
+        <!-- 字体大小三级面板（仅影响各 TAB 详情页正文，不影响顶部工具栏/菜单栏） -->
+        <div class="popup-panel fontset-panel" id="fontSetPanel">
+            <div class="fs-label">详情页字体大小</div>
+            <div class="fs-row">
+                <span class="fs-min">小</span>
+                <input type="range" id="fontSizeSlider" min="12" max="22" step="1" value="14" aria-label="详情页字体大小">
+                <span class="fs-max">大</span>
+                <span class="fs-value" id="fontSizeValue">14px</span>
+            </div>
+            <div class="fs-hint">仅影响便签/聊天/翻译/创作/日历详情页文字</div>
+            <div class="fs-actions">
+                <button class="fs-btn fs-reset-btn" id="fontSizeResetBtn">恢复默认</button>
+            </div>
+        </div>
+        <!-- FM 收音机设置面板（P5：API 基址/超时/代理/默认国家/自定义电台导入/清除缓存）-->
+        <div class="popup-panel fontset-panel" id="fmSettingsPanel">
+            <div class="fs-label">FM 收音机设置</div>
+            <div class="fm-field">
+                <label class="fm-label" for="fmApiBaseUrl">API 基址</label>
+                <select id="fmApiBaseUrl" class="fm-select">
+                    <option value="https://all.api.radio-browser.info">自动选择（all.api.radio-browser.info）</option>
+                    <option value="https://de1.api.radio-browser.info">de1.api.radio-browser.info</option>
+                    <option value="https://nl1.api.radio-browser.info">nl1.api.radio-browser.info</option>
+                    <option value="https://at1.api.radio-browser.info">at1.api.radio-browser.info</option>
+                    <option value="cnhk-music">中文/香港音乐电台（精选 + 筛选）</option>
+                    <option value="custom">自定义…</option>
+                </select>
+                <input type="text" id="fmApiBaseUrlCustom" class="fm-input fm-input-custom" placeholder="https://your-mirror.example.com" style="display:none">
+            </div>
+            <div class="fm-field">
+                <label class="fm-label" for="fmTimeout">请求超时（ms）</label>
+                <input type="number" id="fmTimeout" class="fm-input" min="3000" max="30000" step="1000" value="10000">
+            </div>
+            <div class="fm-field">
+                <label class="fm-label" for="fmDefaultCountry">默认国家</label>
+                <input type="text" id="fmDefaultCountry" class="fm-input" placeholder="China" maxlength="64">
+            </div>
+            <div class="fm-field fm-field-inline">
+                <label class="fm-label" for="fmEnableProxy">启用代理</label>
+                <input type="checkbox" id="fmEnableProxy" class="fm-checkbox">
+                <span class="fm-hint">复用项目代理配置</span>
+            </div>
+            <div class="fm-field">
+                <label class="fm-label">自定义电台列表</label>
+                <button class="fm-btn" id="fmImportBtn">导入 JSON 文件</button>
+                <span class="fm-hint" id="fmImportHint">未导入</span>
+            </div>
+            <div class="fm-field">
+                <label class="fm-label">电台缓存</label>
+                <button class="fm-btn fm-btn-danger" id="fmClearCacheBtn">清除缓存</button>
+                <span class="fm-hint">7 天后自动过期</span>
+            </div>
+            <div class="fs-actions">
+                <button class="fs-btn fs-reset-btn" id="fmResetBtn">恢复默认</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 内容区 -->
+    <div class="body">
+        <!-- 便签页（左：便签列表 + 右：内容编辑区） -->
+        <div class="tab-page tab-notes active" id="tab-notes" role="tabpanel" aria-label="便签内容区" tabindex="0">
+            <div class="notes-panel">
+                <div class="sidebar-header">
+                    <span>便签列表</span>
+                    <div class="search-box">
+                        <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" id="noteSearchInput" class="search-input" placeholder="搜索便签..." aria-label="搜索便签">
+                    </div>
+                    <button class="new-note-btn" id="newNoteBtn" title="新建便签" aria-label="新建便签"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+                </div>
+                <div class="note-list" id="noteList"></div>
+            </div>
+            <div class="content-slot" id="notesContentSlot"></div>
+        </div>
+
+        <!-- 闹钟页（左：内容编辑区 + 右：闹钟） -->
+        <div class="tab-page tab-clock" id="tab-clock" role="tabpanel" aria-label="闹钟内容区" tabindex="0">
+            <div class="content-slot" id="clockContentSlot"></div>
+            <div class="clock-panel">
+                <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="timerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#7fb3b3"/>
+                            <stop offset="100%" stop-color="#6ba3c9"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+                <div class="clock-display">
+                    <div class="clock-date" id="clockDate">----年-月-日</div>
+                    <div class="clock-time" id="clockTime">--:--:--</div>
+                    <div class="clock-week" id="clockWeek">星期-</div>
+                </div>
+                <div class="alarm-section">
+                    <div class="alarm-tabs" role="tablist" aria-label="闹钟类型">
+                        <button class="alarm-tab active" data-alarm-tab="timer" role="tab" aria-selected="true" aria-controls="timerPanel" tabindex="0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><line x1="10" y1="2" x2="14" y2="2"/><line x1="12" y1="2" x2="12" y2="6"/><circle cx="12" cy="14" r="8"/><polyline points="12 14 12 10 14 12"/></svg>倒计时</button>
+                        <button class="alarm-tab" data-alarm-tab="alarm" role="tab" aria-selected="false" aria-controls="alarmPanel" tabindex="-1"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><circle cx="12" cy="13" r="8"/><polyline points="12 9 12 13 15 15"/><path d="M5 3L2 6"/><path d="M19 3l3 3"/></svg>定时闹钟</button>
+                    </div>
+                    <div class="alarm-panel active" id="timerPanel" role="tabpanel" aria-label="倒计时设置" tabindex="0">
+                        <div class="timer-progress-wrap">
+                            <svg class="timer-ring" width="120" height="120" aria-hidden="true">
+                                <circle cx="60" cy="60" r="52" class="timer-ring-bg"></circle>
+                                <circle cx="60" cy="60" r="52" class="timer-ring-fg" id="timerRingFg"></circle>
+                            </svg>
+                            <div class="timer-display" id="timerDisplay">00:00:00</div>
+                        </div>
+                        <div class="timer-inputs">
+                            <div class="time-input-group">
+                                <label for="timerH">时</label>
+                                <input type="number" id="timerH" min="0" max="23" value="0" aria-label="计时器小时">
+                            </div>
+                            <div class="time-input-group">
+                                <label for="timerM">分</label>
+                                <input type="number" id="timerM" min="0" max="59" value="0" aria-label="计时器分钟">
+                            </div>
+                            <div class="time-input-group">
+                                <label for="timerS">秒</label>
+                                <input type="number" id="timerS" min="0" max="59" value="30" aria-label="计时器秒数">
+                            </div>
+                        </div>
+                        <div class="alarm-extra-row">
+                            <input type="text" id="timerLabel" placeholder="文字说明（可选）" maxlength="50" aria-label="计时器文字说明">
+                            <select id="timerSound" aria-label="计时器提示音">
+                                <option value="default">默认叮咚</option>
+                                <option value="apple">苹果风格</option>
+                                <option value="android">安卓风格</option>
+                                <option value="nokia">诺基亚经典</option>
+                                <option value="crystal">清脆铃声</option>
+                                <option value="bird">鸟鸣</option>
+                                <option value="electronic">电子闹钟</option>
+                            </select>
+                        </div>
+                        <div class="timer-actions">
+                            <button class="timer-btn start" id="timerStartBtn" aria-label="计时器开始"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M6 4l14 8-14 8V4z" fill="currentColor" stroke="none"/></svg>开始</button>
+                            <button class="timer-btn pause" id="timerPauseBtn" disabled aria-label="计时器暂停"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/></svg>暂停</button>
+                            <button class="timer-btn reset" id="timerResetBtn" aria-label="计时器重置"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>重置</button>
+                        </div>
+                    </div>
+                    <div class="alarm-panel" id="alarmPanel" role="tabpanel" aria-label="定时闹钟设置" tabindex="0">
+                        <div class="alarm-set-row">
+                            <div class="time-input-group">
+                                <label for="alarmH">时</label>
+                                <input type="number" id="alarmH" min="0" max="23" value="8" aria-label="闹钟小时">
+                            </div>
+                            <div class="time-input-group">
+                                <label for="alarmM">分</label>
+                                <input type="number" id="alarmM" min="0" max="59" value="0" aria-label="闹钟分钟">
+                            </div>
+                            <div class="time-input-group">
+                                <label for="alarmS">秒</label>
+                                <input type="number" id="alarmS" min="0" max="59" value="0" aria-label="闹钟秒数">
+                            </div>
+                            <button class="timer-btn start" id="alarmAddBtn" aria-label="添加闹钟"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加</button>
+                        </div>
+                        <div class="alarm-extra-row">
+                            <input type="text" id="alarmLabel" placeholder="文字说明（可选）" maxlength="50" aria-label="闹钟文字说明">
+                            <select id="alarmSound" aria-label="闹钟提示音">
+                                <option value="default">默认叮咚</option>
+                                <option value="apple">苹果风格</option>
+                                <option value="android">安卓风格</option>
+                                <option value="nokia">诺基亚经典</option>
+                                <option value="crystal">清脆铃声</option>
+                                <option value="bird">鸟鸣</option>
+                                <option value="electronic">电子闹钟</option>
+                            </select>
+                        </div>
+                        <div class="alarm-list-wrap">
+                            <div class="alarm-list-header"><span>已设闹钟</span><span id="alarmCount">0</span></div>
+                            <div class="alarm-list" id="alarmList"></div>
+                        </div>
+                        <div class="alarm-stop-row">
+                            <button class="timer-btn stop" id="alarmStopBtn" disabled>🔕 停止响铃</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 内容编辑区（可共享移动的独立 DOM） -->
+        <div id="contentPanel" style="display:none">
+            <div class="editor-wrap">
+                <div class="editor-label">
+                    <span>便签内容</span>
+                    <div class="editor-label-tools">
+                        <button class="md-toggle-btn" id="noteHistoryBtn" title="历史版本（后悔药）" aria-label="历史版本"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button>
+                        <button class="md-toggle-btn" id="exportImageBtn" title="一键转长图（复制到剪贴板）" aria-label="一键转长图"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></button>
+                        <button class="md-toggle-btn" id="popoutNoteBtn" title="扯出小纸条（独立置顶窗口）" aria-label="扯出小纸条"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M15 3h6v6"/><polyline points="10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                        <button class="md-toggle-btn" id="mdToggleBtn" title="切换 Markdown 预览" aria-label="切换 Markdown 预览"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>预览</button>
+                    </div>
+                </div>
+                <textarea id="noteInput" placeholder="在此输入便签内容..." spellcheck="true" aria-label="便签内容"></textarea>
+                <div class="note-preview-wrap" id="notePreviewWrap"></div>
+            </div>
+            <div class="todo-wrap">
+                <div class="todo-header">
+                    <span>待办事项</span>
+                    <div class="todo-header-right">
+                        <button class="md-toggle-btn" id="popoutTodoBtn" title="扯出待办小纸条（独立置顶窗口）" aria-label="扯出待办小纸条"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M15 3h6v6"/><polyline points="10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                        <span class="todo-count" id="todoCount">0</span>
+                    </div>
+                </div>
+                <div class="todo-list" id="todoList"></div>
+                <div class="todo-bottom-bar">
+                    <!-- 左下角工具栏：归档文件夹 + 垃圾桶，与右侧待办输入框上下对齐 -->
+                    <div class="note-toolbar">
+                        <button class="note-tool-btn" id="archiveFolderBtn" title="查看归档文件夹" aria-label="查看归档文件夹"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+                        <button class="note-tool-btn" id="trashFolderBtn" title="查看垃圾桶" aria-label="查看垃圾桶"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                    </div>
+                    <!-- 右侧待办输入框 -->
+                    <input type="text" id="todoInput" placeholder="添加待办事项..." aria-label="添加待办事项">
+                    <button class="todo-add-btn" id="todoAddBtn" title="添加" aria-label="添加待办"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI 聊天页（独立页面） -->
+        <div class="tab-page tab-chat" id="tab-chat" role="tabpanel" aria-label="聊天内容区" tabindex="0">
+            <div class="chat-section">
+                <div class="chat-sidebar">
+                    <div class="chat-sidebar-header">
+                        <span>会话</span>
+                        <button class="chat-new-btn" id="chatNewBtn" title="新建会话" aria-label="新建会话">+</button>
+                    </div>
+                    <div class="chat-list" id="chatList"></div>
+                </div>
+                <div class="chat-main">
+                    <div class="chat-header">
+                        <span class="chat-title" id="chatTitle">新对话</span>
+                        <button class="chat-del-btn" id="chatDelBtn" title="删除当前会话" aria-label="删除当前会话">✕</button>
+                    </div>
+                    <div class="chat-messages" id="chatMessages"></div>
+                    <div class="chat-attachments" id="chatAttachments"></div>
+                    <div class="chat-input-wrap">
+                        <textarea class="chat-input" id="chatInput" placeholder="输入消息，Enter 发送，Shift+Enter 换行..." rows="2" aria-label="聊天消息输入框"></textarea>
+                        <div class="chat-input-bottom">
+                            <div class="chat-input-tools">
+                                <button class="chat-tool-btn" id="chatArchiveFolderBtn" title="查看聊天归档文件夹" aria-label="查看聊天归档文件夹"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+                                <button class="chat-tool-btn" id="chatTrashFolderBtn" title="查看聊天垃圾桶" aria-label="查看聊天垃圾桶"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                                <button class="chat-tool-btn" id="chatExportMdBtn" title="导出当前 AI 会话为 Markdown 文件" aria-label="导出当前 AI 会话为 Markdown 文件"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                                <button class="chat-tool-btn" id="chatThinkingBtn" title="开启/关闭 AI 思考模式" aria-label="开启或关闭 AI 思考模式"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none" aria-hidden="true"><path d="M9 21h6"/><path d="M12 17v4"/><path d="M12 3a6 6 0 0 1 4 10.5c-.5.5-1 1.5-1 2.5H9c0-1-.5-2-1-2.5A6 6 0 0 1 12 3z"/></svg></button>
+                                <button class="chat-tool-btn" id="chatUploadBtn" title="上传文件/图片" aria-label="上传文件或图片"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;pointer-events:none" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+                            </div>
+                            <button class="chat-regen-btn" id="chatRegenBtn" title="重新生成最后一条 AI 回复" aria-label="重新生成最后一条 AI 回复">↻</button>
+                            <button class="chat-send-btn" id="chatSendBtn" title="发送" aria-label="发送消息">➤</button>
+                        </div>
+                    </div>
+                    <input type="file" id="chatFileInput" multiple style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0" aria-label="上传文件" tabindex="-1">
+                </div>
+            </div>
+        </div>
+
+        <!-- AI 创作页（独立页面） -->
+        <div class="tab-page tab-create" id="tab-create" role="tabpanel" aria-label="创作内容区" tabindex="0">
+            <div class="create-section">
+                <div class="create-wrap">
+                    <div class="create-display" id="createDisplay">
+                        <div class="create-placeholder" id="createPlaceholder"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>生成的图片将显示在这里</div>
+                        <img id="createImage" style="display:none;max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;cursor:pointer" alt="生成图片" title="点击复制图片">
+                        <video id="createVideo" style="display:none;max-width:100%;max-height:100%;border-radius:8px;object-fit:contain" controls aria-label="生成视频"></video>
+                    </div>
+                    <div class="create-input-area">
+                        <div class="create-prompt-row">
+                            <textarea class="create-prompt" id="createPrompt" placeholder="输入图片描述提示词 (Prompt)..." spellcheck="true" aria-label="图片描述提示词输入框"></textarea>
+                            <div class="create-upload-preview" id="uploadPreview" style="display:none">
+                                <img id="uploadPreviewImg" alt="参考图">
+                                <button class="upload-close" id="uploadClose" title="移除参考图" aria-label="移除参考图"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                                <span class="upload-filename" id="uploadFilename"></span>
+                            </div>
+                        </div>
+                        <div class="create-actions">
+                            <select id="createModelSelect" class="create-model-select" title="选择生成模型" aria-label="选择生成模型">
+                                <option value="image">生成图片模型</option>
+                                <option value="t2v">文字生成视频</option>
+                                <option value="i2v">图片生成视频</option>
+                            </select>
+                            <div class="create-mode-switch">
+                                <button class="create-mode-btn active" id="createModeImageBtn" data-mode="image" title="切换到图片生成模式" aria-label="切换到图片生成模式"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>图片生成</button>
+                                <button class="create-mode-btn" id="createModeVideoBtn" data-mode="video" title="切换到视频生成模式" aria-label="切换到视频生成模式"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>视频生成</button>
+                            </div>
+                            <input type="number" id="createVideoDuration" class="create-video-duration" placeholder="秒数" title="视频时长（秒），可选 5/10/15" min="3" max="15" value="5" list="durationList" style="display:none;width:70px" aria-label="视频时长秒数">
+                            <datalist id="durationList">
+                                <option value="5">5 秒</option>
+                                <option value="10">10 秒</option>
+                                <option value="15">15 秒</option>
+                            </datalist>
+                            <input type="text" id="createVideoRatio" class="create-video-ratio" placeholder="视频比例" title="视频宽高比，可选 16:9/9:16/1:1/4:3/3:4" list="ratioList" style="display:none;width:90px" aria-label="视频宽高比">
+                            <datalist id="ratioList">
+                                <option value="16:9">16:9 横屏</option>
+                                <option value="9:16">9:16 竖屏</option>
+                                <option value="1:1">1:1 正方形</option>
+                                <option value="4:3">4:3 横屏</option>
+                                <option value="3:4">3:4 竖屏</option>
+                            </datalist>
+                            <input type="text" id="createSize" list="sizeList" placeholder="尺寸" title="图片尺寸（留空=AI自动选择）" aria-label="图片尺寸">
+                            <datalist id="sizeList">
+                                <option value="auto">AI 自动选择（默认）</option>
+                                <option value="1024x1024">1024x1024 (1:1)</option>
+                                <option value="1024x1792">1024x1792 (9:16)</option>
+                                <option value="1792x1024">1792x1024 (16:9)</option>
+                                <option value="2048*2048">2048*2048 (1:1 百炼)</option>
+                                <option value="2688*1536">2688*1536 (16:9 百炼)</option>
+                                <option value="1536*2688">1536*2688 (9:16 百炼)</option>
+                                <option value="2368*1728">2368*1728 (4:3 百炼)</option>
+                                <option value="1728*2368">1728*2368 (3:4 百炼)</option>
+                            </datalist>
+                            <button class="create-optimize-btn" id="createOptimizeBtn" aria-label="优化提示词"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>优化</button>
+                            <button class="create-upload-btn" id="createUploadBtn" aria-label="上传参考图"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>上传</button>
+                            <input type="file" id="createFileInput" accept="image/png,image/jpeg,image/webp" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0" aria-label="上传参考图文件" tabindex="-1">
+                            <button class="create-copy-btn" id="createCopyBtn" style="display:none" aria-label="复制图片"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制图片</button>
+                            <button class="create-gen-btn" id="createGenBtn" aria-label="开始生成"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>生成</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 翻译页（左：原文输入 + 右：译文显示） -->
+        <div class="tab-page tab-translate" id="tab-translate" role="tabpanel" aria-label="翻译内容区" tabindex="0">
+            <div class="translate-wrap">
+                <div class="translate-panels">
+                    <div class="translate-panel">
+                        <div class="translate-panel-header">
+                            <span>📝 原文</span>
+                            <div class="translate-panel-actions">
+                                <button class="translate-upload-btn" id="translateUploadBtn" title="上传图片（单图，OCR 翻译）" aria-label="上传图片"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+                                <button class="translate-clear-btn" id="translateClearBtn" title="清空" aria-label="清空原文">✕</button>
+                            </div>
+                        </div>
+                        <div class="translate-attachments" id="translateAttachments"></div>
+                        <textarea class="translate-textarea" id="translateSource" placeholder="在此粘贴或输入要翻译的外语内容，也可粘贴/上传图片进行 OCR 翻译..." spellcheck="false" aria-label="翻译原文输入框"></textarea>
+                        <input type="file" id="translateFileInput" accept="image/*" style="display:none">
+                    </div>
+                    <div class="translate-panel">
+                        <div class="translate-panel-header">
+                            <span>🌐 译文（简体中文）</span>
+                            <button class="translate-copy-btn" id="translateCopyBtn" title="复制译文" style="display:none" aria-label="复制译文"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                        </div>
+                        <div class="translate-result" id="translateResult" role="region" aria-label="翻译结果" aria-live="polite">
+                            <div class="translate-placeholder">译文将显示在这里</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="translate-actions">
+                    <div class="translate-btn-group">
+                        <select class="translate-lang-select" id="translateLangSelect" title="选择翻译目标语言" aria-label="选择翻译目标语言">
+                            <option value="zh">中文</option>
+                            <option value="en">英文</option>
+                            <option value="ja">日文</option>
+                            <option value="fr">法文</option>
+                            <option value="de">德文</option>
+                            <option value="pt">葡萄牙文</option>
+                            <option value="ar">阿拉伯文</option>
+                            <option value="es">西班牙文</option>
+                        </select>
+                        <button class="translate-btn" id="translateBtn" aria-label="一键翻译"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M4 5h7"/><path d="M7 4c0 4.418-2.239 8-5 8"/><path d="M5 8c0 2.5 2.5 4.5 5 5"/><path d="M12 19l4-9 4 9"/><path d="M13.5 16h5"/></svg>一键翻译</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 语音工坊页（文本合成区） -->
+        <div class="tab-page tab-tts" id="tab-tts" role="tabpanel" aria-label="语音工坊内容区" tabindex="0">
+            <div class="tts-wrap">
+                <div class="tts-section tts-synth-section">
+                    <!-- 头部：标题 + 模型快选器 -->
+                    <div class="tts-section-header">
+                        <div class="tts-header-left">
+                            <span class="tts-section-title"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:6px" aria-hidden="true"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>语音合成工坊</span>
+                            <span class="tts-section-sub">输入文本，选择模型与音色，一键生成专业语音</span>
+                        </div>
+                        <div class="tts-header-right">
+                            <label for="ttsModelSelect" class="tts-model-label">模型</label>
+                            <select id="ttsModelSelect" class="tts-model-select" aria-label="快速选择语音模型">
+                                <option value="">— 未配置 —</option>
+                                <option value="qwen-audio-3.0-tts-plus">Qwen-Audio-Plus（旗舰）</option>
+                                <option value="qwen-audio-3.0-tts-flash">Qwen-Audio-Flash（实时）</option>
+                                <option value="cosyvoice-v1">CosyVoice v1（标准）</option>
+                                <option value="cosyvoice-v1-instruct">CosyVoice-Instruct（情感）</option>
+                            </select>
+                        </div>
+                    </div>
+                    <!-- 文本输入区 -->
+                    <div class="tts-textarea-wrap">
+                        <textarea class="tts-textarea" id="ttsText" placeholder="在此输入要合成的文本...（最多 1000 字）" spellcheck="false" maxlength="1000" aria-label="要合成的文本"></textarea>
+                        <div class="tts-textarea-counter" id="ttsTextCounter" aria-live="polite">0 / 1000</div>
+                    </div>
+                    <!-- 控件行：音色 + 格式 -->
+                    <div class="tts-controls-row">
+                        <div class="tts-field tts-field-voice">
+                            <label for="ttsVoiceSelect">预设音色</label>
+                            <select id="ttsVoiceSelect" aria-label="预设音色"><option value="">默认音色（由模型自动匹配）</option></select>
+                        </div>
+                        <div class="tts-field tts-field-format">
+                            <label for="ttsFormatSelect">输出格式</label>
+                            <select id="ttsFormatSelect" aria-label="输出格式"><option value="mp3">MP3</option><option value="wav">WAV</option><option value="ogg">OGG</option></select>
+                        </div>
+                    </div>
+                    <!-- 音色信息卡片：展示当前选中音色的详细描述 -->
+                    <div class="tts-voice-info tts-voice-info-default" id="ttsVoiceInfo">默认音色：由模型自动匹配最佳音色</div>
+                    <!-- 情感指令 -->
+                    <div class="tts-field tts-instruct-field">
+                        <label for="ttsInstruct">情感指令（Director Mode，可选）<span class="tts-field-hint">仅 CosyVoice-Instruct 支持</span></label>
+                        <input type="text" id="ttsInstruct" placeholder='如"用温柔的语气"、"激动地"、"低沉缓慢地"' aria-label="情感指令">
+                    </div>
+                    <!-- 操作行 -->
+                    <div class="tts-actions">
+                        <button class="tts-gen-btn" id="ttsGenBtn" aria-label="生成语音"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>生成语音</button>
+                        <span class="tts-status" id="ttsStatus" role="status" aria-live="polite"></span>
+                    </div>
+                    <!-- 播放器 + 下载 -->
+                    <div class="tts-player-wrap" id="ttsPlayerWrap" style="display:none">
+                        <audio id="ttsAudio" controls preload="auto" aria-label="合成的语音"></audio>
+                        <button class="tts-download-btn" id="ttsDownloadBtn" title="下载音频" aria-label="下载音频"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>下载</button>
+                    </div>
+                    <!-- 底部：清理缓存 -->
+                    <div class="tts-footer">
+                        <button class="tts-cleanup-btn" id="ttsCleanupBtn" title="清理超过 7 天或总量超 100MB 的音频缓存" aria-label="清理音频缓存"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>清理音频缓存</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 音乐页（V7.4 P0 骨架：左右双栏，左音乐播放器 / 右 FM 收音机）-->
+        <div class="tab-page tab-music" id="tab-music" role="tabpanel" aria-label="音乐内容区" tabindex="0">
+            <div class="music-panel" id="musicPanel">
+                <!-- 左侧：本地音乐播放器（P1+P2 完整实现）-->
+                <div class="music-player" id="musicPlayer">
+                    <!-- 顶部工具栏：添加文件/文件夹、清空、搜索 -->
+                    <div class="music-toolbar">
+                        <button class="music-btn-icon" id="musicAddFilesBtn" title="添加音乐文件" aria-label="添加音乐文件">+ 文件</button>
+                        <button class="music-btn-icon" id="musicAddFolderBtn" title="添加音乐文件夹" aria-label="添加音乐文件夹">+ 文件夹</button>
+                        <button class="music-btn-icon music-btn-danger" id="musicClearBtn" title="清空播放列表" aria-label="清空播放列表">清空</button>
+                        <input type="search" id="musicSearchInput" class="music-search" placeholder="搜索曲目/艺术家…" aria-label="搜索播放列表">
+                    </div>
+
+                    <!-- 播放列表区 -->
+                    <div class="music-list-wrap">
+                        <div class="music-list" id="musicList" role="listbox" aria-label="播放列表"></div>
+                        <div class="music-empty" id="musicEmpty">点击「+文件」或「+文件夹」添加音乐</div>
+                    </div>
+
+                    <!-- 底部控制条（专业播放器风格：封面 + 曲目信息 + 进度条 + 主控按钮 + 音量）-->
+                    <div class="music-controls">
+                        <!-- 左：封面 + 曲目信息 -->
+                        <div class="music-now-playing">
+                            <div class="music-cover-wrap">
+                                <div class="music-cover-placeholder" aria-hidden="true">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                                </div>
+                                <img class="music-cover" id="musicCover" alt="" aria-hidden="true">
+                            </div>
+                            <div class="music-info">
+                                <div class="music-track-title" id="musicTrackTitle">未播放</div>
+                                <div class="music-track-artist" id="musicTrackArtist">—</div>
+                            </div>
+                        </div>
+
+                        <!-- 中：进度条 + 主控按钮 -->
+                        <div class="music-center">
+                            <div class="music-buttons">
+                                <button class="music-btn-icon-sm fav-filter-btn" id="musicFavFilterBtn" title="仅显示收藏" aria-label="收藏夹" aria-pressed="false">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .587l3.668 7.431 8.332 1.21-6 5.847 1.416 8.252L12 18.896l-7.416 4.431L6 15.075 0 9.228l8.332-1.21z"/></svg>
+                                </button>
+                                <button class="music-btn" id="musicPrevBtn" title="上一首" aria-label="上一首">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                                </button>
+                                <button class="music-btn music-btn-main" id="musicPlayBtn" title="播放/暂停" aria-label="播放">
+                                    <svg class="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                                    <svg class="icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>
+                                </button>
+                                <button class="music-btn" id="musicNextBtn" title="下一首" aria-label="下一首">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6h2v12h-2z"/></svg>
+                                </button>
+                                <button class="music-btn music-btn-mode" id="musicModeBtn" title="顺序播放" aria-label="切换播放模式" data-mode="sequential">
+                                    <svg class="icon-sequential" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                                </button>
+                            </div>
+                            <div class="music-progress-wrap">
+                                <span class="music-time" id="musicCurrentTime">0:00</span>
+                                <div class="music-progress-track" id="musicProgressTrack">
+                                    <div class="music-progress-fill" id="musicProgressFill"></div>
+                                    <div class="music-progress-thumb" id="musicProgressThumb"></div>
+                                    <input type="range" id="musicProgress" class="music-progress" min="0" max="100" step="0.1" value="0" aria-label="播放进度">
+                                </div>
+                                <span class="music-time" id="musicTotalTime">0:00</span>
+                            </div>
+                        </div>
+
+                        <!-- 右：音量 -->
+                        <div class="music-right">
+                            <div class="music-volume-wrap">
+                                <button class="music-vol-icon-btn" id="musicVolIconBtn" title="静音切换" aria-label="静音切换">
+                                    <svg class="icon-vol-high" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                                    <svg class="icon-vol-mute" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+                                </button>
+                                <div class="music-volume-track">
+                                    <div class="music-volume-fill" id="musicVolumeFill"></div>
+                                    <input type="range" id="musicVolume" class="music-volume" min="0" max="100" step="1" value="80" aria-label="音量">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右侧：FM 收音机（P3+P4 完整实现）-->
+                <div class="radio-fm" id="radioFm">
+                    <!-- 顶部状态栏：当前电台名 + 国家 + 在线状态 + 网络速度 -->
+                    <div class="radio-status-bar" id="radioStatusBar">
+                        <div class="radio-status-fill"></div>
+                        <span class="radio-status-text" id="radioStatusText">未播放</span>
+                        <span class="radio-station-current" id="radioStationCurrent">—</span>
+                        <span class="radio-net-speed" id="radioNetSpeed">0 KB/s</span>
+                    </div>
+
+                    <!-- 控制按钮区 -->
+                    <div class="radio-controls">
+                        <button class="radio-btn radio-refresh-ctrl-btn" id="radioRefreshCtrlBtn" title="刷新电台列表（优先显示中文/香港电台）" aria-label="刷新电台列表">↻</button>
+                        <button class="radio-btn" id="radioPrevBtn" title="自动上一个" aria-label="自动上一个">⏮</button>
+                        <button class="radio-btn radio-btn-main" id="radioPlayBtn" title="播放/暂停" aria-label="播放/暂停">▶</button>
+                        <button class="radio-btn" id="radioNextBtn" title="自动下一个" aria-label="自动下一个">⏭</button>
+                        <button class="radio-btn radio-btn-fav" id="radioFavBtn" title="收藏夹：只显示已收藏电台" aria-label="收藏夹筛选" aria-pressed="false">☆</button>
+                    </div>
+
+                    <!-- 电台列表区（标签页切换：热门/收藏/搜索 + 刷新按钮）-->
+                    <div class="radio-tabs" id="radioTabBtns">
+                        <button class="radio-tab-btn active" data-tab="hot">热门</button>
+                        <button class="radio-tab-btn" data-tab="fav">收藏</button>
+                        <button class="radio-tab-btn" data-tab="search">搜索</button>
+                        <input type="search" id="radioSearchInput" class="radio-search" placeholder="搜索电台…" aria-label="搜索电台" style="display:none">
+                        <button class="radio-tab-btn radio-search-btn" id="radioSearchBtn" style="display:none">搜索</button>
+                        <button class="radio-tab-btn radio-refresh-btn" id="radioRefreshBtn" title="刷新电台列表（循环切换数据源）" aria-label="刷新电台列表">↻</button>
+                    </div>
+
+                    <!-- 电台列表 -->
+                    <div class="radio-list-wrap">
+                        <div class="radio-list" id="radioStations" role="listbox" aria-label="电台列表"></div>
+                    </div>
+
+                    <!-- 底部流信息 -->
+                    <div class="radio-stream-info" id="radioStreamInfo">—</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日历页（单一内容框：上部 60% 日期 / 下部 40% 左闹钟/右待办） -->
+        <div class="tab-page tab-calendar" id="tab-calendar" role="tabpanel" aria-label="日历内容区" tabindex="0">
+            <div class="calendar-panel">
+                <!-- 顶部热力图区域：Flex 双层布局，365 天活跃度 -->
+                <div class="hm-section" id="hmSection">
+                    <div class="hm-header">
+                        <span class="hm-title">🔥 活跃度热力图</span>
+                        <span class="hm-motto">人生无常，开心就好</span>
+                        <span class="hm-summary" id="hmSummary">近一年共 0 次活跃</span>
+                    </div>
+                    <div class="hm-scroll" id="hmScroll">
+                        <div class="hm-container" id="hmContainer"></div>
+                    </div>
+                    <div class="hm-legend">
+                        <span class="hm-legend-label">少</span>
+                        <div class="hm-legend-cells">
+                            <span class="hm-cell lvl-0"></span>
+                            <span class="hm-cell lvl-1"></span>
+                            <span class="hm-cell lvl-2"></span>
+                            <span class="hm-cell lvl-3"></span>
+                            <span class="hm-cell lvl-4"></span>
+                        </div>
+                        <span class="hm-legend-label">多</span>
+                    </div>
+                </div>
+                <!-- 上半部 60%：日历日期信息 -->
+                <div class="cal-top">
+                    <div class="calendar-header">
+                        <button class="cal-nav-btn" id="calPrevBtn" title="上一月" aria-label="上一月"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
+                        <span class="cal-title" id="calTitle">----年--月</span>
+                        <button class="cal-nav-btn" id="calNextBtn" title="下一月" aria-label="下一月"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></button>
+                        <button class="cal-today-btn" id="calTodayBtn" title="回到今天">今天</button>
+                    </div>
+                    <div class="calendar-weekdays">
+                        <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+                    </div>
+                    <div class="calendar-grid" id="calGrid"></div>
+                </div>
+                <!-- 下半部 40%：左=闹钟信息，右=待办事项 -->
+                <div class="cal-bottom">
+                    <!-- 下半部左：闹钟信息 -->
+                    <div class="cal-bottom-left">
+                        <div class="cal-detail-date" id="calDetailDate">选择一个日期</div>
+                        <div class="cal-input-area" id="calAlarmInputArea" style="display:none">
+                            <div class="cal-input-row">
+                                <input type="time" id="calAlarmTime" class="cal-time-input" value="09:00" title="设置闹钟时间" aria-label="闹钟时间">
+                                <input type="text" id="calAlarmLabel" class="cal-time-input" style="flex:1;min-width:0" placeholder="标签" aria-label="闹钟标签">
+                                <button class="cal-save-btn" id="calSaveAlarmBtn" aria-label="保存闹钟">+ 闹钟</button>
+                            </div>
+                        </div>
+                        <div class="cal-list-area">
+                            <div class="cal-section-title">⏰ 当日闹钟</div>
+                            <div class="cal-alarm-list" id="calDayAlarmList" role="list" aria-label="当日闹钟列表"></div>
+                        </div>
+                    </div>
+                    <!-- 下半部右：待办事项 -->
+                    <div class="cal-bottom-right">
+                        <div class="cal-detail-date" id="calTodoTitle">当日待办</div>
+                        <div class="cal-input-area" id="calTodoInputArea" style="display:none">
+                            <textarea class="cal-note-input" id="calNoteText" placeholder="为这天写点什么..." rows="2" aria-label="便签内容"></textarea>
+                            <div class="cal-input-row">
+                                <button class="cal-save-btn" id="calSaveTodoBtn" style="margin-left:0;width:100%" aria-label="保存便签">保存便签</button>
+                            </div>
+                        </div>
+                        <div class="cal-list-area">
+                            <div class="cal-section-title">📌 待办事项</div>
+                            <div class="cal-note-list" id="calNoteList" role="list" aria-label="当日待办列表"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="resize-handle" id="resizeHandle" role="separator" tabindex="0" aria-label="调整窗口大小（方向键微调，Shift+方向键大幅调整）"></div>
+</div>
+
+<!-- AI 设置模态框 -->
+<div class="modal-overlay" id="aiModal" role="dialog" aria-modal="true" aria-labelledby="aiModalTitle">
+    <div class="modal-card">
+        <div class="modal-header"><span id="aiModalTitle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>AI 设置</span><button class="modal-close-btn" id="modalCloseBtn" aria-label="关闭"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="modal-body">
+            <div class="modal-field"><label for="aiBaseUrl">API 地址</label><input type="text" id="aiBaseUrl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" aria-label="API 地址"></div>
+            <div class="modal-field"><label for="aiApiKey">API Key</label><input type="password" id="aiApiKey" placeholder="sk-..." autocomplete="off" spellcheck="false" aria-label="API Key"></div>
+            <div class="modal-field">
+                <label for="aiModelSelect">聊天模型</label>
+                <div class="model-row">
+                    <input type="text" id="aiModelSelect" list="modelList" placeholder="选择或输入模型" aria-label="聊天模型">
+                    <datalist id="modelList"></datalist>
+                    <button class="search-models-btn" id="searchModelsBtn" aria-label="搜索可用模型">搜索</button>
+                </div>
+                <div class="model-status" id="modelStatus" role="status" aria-live="polite"></div>
+            </div>
+            <div class="modal-field">
+                <label for="aiTemperature">温度（Temperature）0 ~ 2</label>
+                <div class="temp-row">
+                    <input type="range" id="aiTemperature" min="0" max="2" step="0.1" value="1" aria-label="温度（Temperature）">
+                    <span class="temp-value" id="tempValue">1.0</span>
+                </div>
+            </div>
+            <div class="modal-field"><label for="aiPrompt">提示词（System Prompt）</label><textarea id="aiPrompt" placeholder="可选的 system prompt，留空则不发送" aria-label="系统提示词"></textarea></div>
+            <button class="modal-save-btn" id="modalSaveBtn" aria-label="保存聊天设置">保存聊天设置</button>
+            <div class="modal-field" style="border-top:1px solid var(--border);padding-top:12px;margin-top:6px">
+                <label style="font-weight:600;color:var(--text-2);text-transform:none;font-size:12px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>图片生成设置</label>
+            </div>
+            <div class="modal-field">
+                <label for="imgProvider">接口标准</label>
+                <select id="imgProvider" aria-label="接口标准">
+                    <option value="openai">OpenAI 标准</option>
+                    <option value="dashscope">阿里云百炼 DashScope</option>
+                </select>
+            </div>
+            <div class="modal-field"><label for="imgBaseUrl">图片 API 地址</label><input type="text" id="imgBaseUrl" placeholder="OpenAI: https://api.openai.com/v1" aria-label="图片 API 地址"></div>
+            <div class="modal-field"><label for="imgApiKey">图片 API Key</label><input type="password" id="imgApiKey" placeholder="sk-..." aria-label="图片 API Key"></div>
+            <div class="modal-field"><label for="imgModel">生图模型</label><input type="text" id="imgModel" placeholder="openai: dall-e-3 / dashscope: wan2.5-t2i-preview" aria-label="生图模型"></div>
+            <div class="modal-field" style="border-top:1px solid var(--border);padding-top:12px;margin-top:6px">
+                <label style="font-weight:600;color:var(--text-2);text-transform:none;font-size:12px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>视频生成设置</label>
+                <div style="font-size:11px;color:var(--text-3);margin-top:4px;line-height:1.5">视频生成仅支持阿里云百炼 wan2.7 系列。留空则复用上方图片生成的百炼地址与 Key。</div>
+            </div>
+            <div class="modal-field"><label for="videoBaseUrl">视频 API 地址</label><input type="text" id="videoBaseUrl" placeholder="留空则复用百炼地址，填 https://dashscope.aliyuncs.com 走官方视频接口" aria-label="视频 API 地址"></div>
+            <div class="modal-field"><label for="videoApiKey">视频 API Key</label><input type="password" id="videoApiKey" placeholder="留空则复用百炼 Key" aria-label="视频 API Key"></div>
+            <div class="modal-field"><label for="videoT2vModel">文生视频模型 (T2V)</label><input type="text" id="videoT2vModel" placeholder="wan2.7-t2v-2026-04-25" aria-label="文生视频模型"></div>
+            <div class="modal-field"><label for="videoI2vModel">图生视频模型 (I2V)</label><input type="text" id="videoI2vModel" placeholder="wan2.7-i2v-2026-04-25" aria-label="图生视频模型"></div>
+            <div class="modal-field" style="border-top:1px solid var(--border);padding-top:12px;margin-top:6px">
+                <label style="font-weight:600;color:var(--text-2);text-transform:none;font-size:12px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>语音模型配置</label>
+                <div style="font-size:11px;color:var(--text-3);margin-top:4px;line-height:1.5">语音工坊 TAB 页专用配置（阿里云百炼 CosyVoice）。留空则复用上方图片/视频的百炼地址与 Key。</div>
+            </div>
+            <div class="modal-field"><label for="ttsBaseUrl">语音 API 地址</label><input type="text" id="ttsBaseUrl" placeholder="留空则复用百炼地址，填 https://dashscope.aliyuncs.com 走官方 TTS 接口" aria-label="语音 API 地址"></div>
+            <div class="modal-field"><label for="ttsApiKey">语音 API Key</label><input type="password" id="ttsApiKey" placeholder="留空则复用百炼 Key" aria-label="语音 API Key"></div>
+            <div class="modal-field"><label for="ttsModel">语音 AI 模型名称</label><input type="text" id="ttsModel" placeholder="cosyvoice-v1（标准）/ cosyvoice-v1-instruct（情感控制）" aria-label="语音 AI 模型名称"></div>
+            <button class="modal-save-btn" id="ttsConfigSaveBtn" aria-label="保存语音设置">保存语音设置</button>
+            <div class="modal-field"><label for="imgSavePath">图片保存地址</label><div class="model-row"><input type="text" id="imgSavePath" placeholder="留空则保存到软件目录" aria-label="图片保存地址"><button class="search-models-btn" id="browsePathBtn" aria-label="浏览选择路径"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>浏览</button></div></div>
+            <button class="modal-save-btn" id="imgSaveBtn" aria-label="保存图片设置">保存图片设置</button>
+            <div class="modal-field" style="border-top:1px solid var(--border);padding-top:12px;margin-top:6px">
+                <button class="modal-save-btn" id="viewLogsBtn" style="background:var(--accent);color:#fff" aria-label="查看日志"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>查看日志</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 日志查看器模态框 -->
+<div class="modal-overlay" id="logModal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
+    <div class="log-modal-card">
+        <div class="modal-header"><span id="logModalTitle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>应用日志</span><button class="modal-close-btn" id="logCloseBtn" aria-label="关闭"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+        <div class="log-toolbar">
+            <span class="log-toolbar-info" id="logInfo">加载中...</span>
+            <select class="log-filter-select" id="logLevelFilter" title="按级别筛选" aria-label="按日志级别筛选">
+                <option value="">全部级别</option>
+                <option value="INFO">INFO</option>
+                <option value="WARN">WARN</option>
+                <option value="ERROR">ERROR</option>
+            </select>
+            <select class="log-filter-select" id="logSourceFilter" title="按来源筛选" aria-label="按日志来源筛选">
+                <option value="">全部来源</option>
+                <option value="main">main</option>
+                <option value="renderer">renderer</option>
+                <option value="popout-note">popout-note</option>
+                <option value="popout-todo">popout-todo</option>
+                <option value="music">music</option>
+                <option value="radio">radio</option>
+            </select>
+            <button class="log-btn" id="logRefreshBtn" aria-label="刷新日志">刷新</button>
+            <button class="log-btn" id="logCopyBtn" aria-label="复制全部日志">复制全部日志</button>
+            <button class="log-btn danger" id="logClearBtn" aria-label="清空日志">清空日志</button>
+        </div>
+        <pre class="log-content" id="logContent" role="log" aria-label="日志内容" aria-live="polite"><div class="log-empty">正在加载日志...</div></pre>
+    </div>
+</div>
+
+<!-- 数据同步设置模态框 -->
+<div class="sync-modal" id="syncModal" role="dialog" aria-modal="true" aria-labelledby="syncModalTitle">
+    <div class="sync-card">
+        <div class="sync-header">
+            <div class="sync-header-title" id="syncModalTitle">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                数据同步（上传备份）
+            </div>
+            <button class="sync-close" id="syncCloseBtn" aria-label="关闭">&times;</button>
+        </div>
+        <div class="sync-tabs" role="tablist" aria-label="同步类型">
+            <button class="sync-tab active" data-sync-tab="s3" role="tab" aria-selected="true" aria-controls="sync-s3-content" tabindex="0">S3 标准接口</button>
+            <button class="sync-tab" data-sync-tab="webdav" role="tab" aria-selected="false" aria-controls="sync-webdav-content" tabindex="-1">WebDAV 接口</button>
+        </div>
+
+        <!-- S3 配置 -->
+        <div class="sync-tab-content active" data-sync-content="s3" id="sync-s3-content" role="tabpanel" aria-label="S3 配置" tabindex="0">
+            <div class="sync-field">
+                <label class="sync-field-label" for="s3Endpoint">服务端点（Endpoint）</label>
+                <input type="text" class="sync-field-input" id="s3Endpoint" placeholder="如 https://s3.amazonaws.com 或 MinIO/R2/OSS 地址" aria-label="S3 服务端点">
+            </div>
+            <div class="sync-field-row">
+                <div class="sync-field" style="flex:1">
+                    <label class="sync-field-label" for="s3Region">区域（Region）</label>
+                    <input type="text" class="sync-field-input" id="s3Region" placeholder="如 us-east-1" aria-label="S3 区域">
+                </div>
+                <div class="sync-field" style="flex:1">
+                    <label class="sync-field-label" for="s3Bucket">存储桶（Bucket）</label>
+                    <input type="text" class="sync-field-input" id="s3Bucket" placeholder="存储桶名称" aria-label="S3 存储桶">
+                </div>
+            </div>
+            <div class="sync-field-row">
+                <div class="sync-field" style="flex:1">
+                    <label class="sync-field-label" for="s3AccessKey">Access Key ID</label>
+                    <input type="text" class="sync-field-input" id="s3AccessKey" placeholder="访问密钥 ID" autocomplete="off" spellcheck="false" aria-label="S3 Access Key ID">
+                </div>
+                <div class="sync-field" style="flex:1">
+                    <label class="sync-field-label" for="s3SecretKey">Secret Access Key</label>
+                    <input type="password" class="sync-field-input" id="s3SecretKey" placeholder="访问密钥" autocomplete="off" spellcheck="false" aria-label="S3 Secret Access Key">
+                </div>
+            </div>
+            <div class="sync-field">
+                <label class="sync-field-label" for="s3Path">备份路径前缀（可选）</label>
+                <input type="text" class="sync-field-input" id="s3Path" placeholder="如 backups/  留空则存到根目录" aria-label="S3 备份路径前缀">
+            </div>
+            <div class="sync-actions">
+                <button class="sync-btn primary" id="s3SaveBtn" aria-label="保存 S3 配置">保存配置</button>
+                <button class="sync-btn" id="s3TestBtn" aria-label="测试 S3 连接">测试连接</button>
+                <button class="sync-btn" id="s3SyncBtn" aria-label="立即上传备份到 S3">立即上传备份</button>
+                <button class="sync-btn" id="s3RestoreBtn" aria-label="从 S3 恢复备份">恢复备份</button>
+            </div>
+        </div>
+
+        <!-- WebDAV 配置 -->
+        <div class="sync-tab-content" data-sync-content="webdav" id="sync-webdav-content" role="tabpanel" aria-label="WebDAV 配置" tabindex="0">
+            <div class="sync-field">
+                <label class="sync-field-label" for="webdavUrl">WebDAV 服务器地址</label>
+                <input type="text" class="sync-field-input" id="webdavUrl" placeholder="如 https://dav.example.com/remote.php/webdav" aria-label="WebDAV 服务器地址">
+            </div>
+            <div class="sync-field-row">
+                <div class="sync-field" style="flex:1">
+                    <label class="sync-field-label" for="webdavUser">用户名</label>
+                    <input type="text" class="sync-field-input" id="webdavUser" placeholder="用户名" autocomplete="off" spellcheck="false" aria-label="WebDAV 用户名">
+                </div>
+                <div class="sync-field" style="flex:1">
+                    <label class="sync-field-label" for="webdavPass">密码</label>
+                    <input type="password" class="sync-field-input" id="webdavPass" placeholder="密码" autocomplete="off" spellcheck="false" aria-label="WebDAV 密码">
+                </div>
+            </div>
+            <div class="sync-field">
+                <label class="sync-field-label" for="webdavPath">备份路径前缀（可选）</label>
+                <input type="text" class="sync-field-input" id="webdavPath" placeholder="如 /便签备份/  留空则存到根目录" aria-label="WebDAV 备份路径前缀">
+            </div>
+            <div class="sync-field">
+                <label class="sync-field-label" for="webdavAllowSelfSigned" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="webdavAllowSelfSigned" style="width:auto;cursor:pointer" aria-label="允许自签名证书">
+                    允许自签名证书（连接个人 NAS/家庭服务器时勾选）
+                </label>
+            </div>
+            <div class="sync-actions">
+                <button class="sync-btn primary" id="webdavSaveBtn" aria-label="保存 WebDAV 配置">保存配置</button>
+                <button class="sync-btn" id="webdavTestBtn" aria-label="测试 WebDAV 连接">测试连接</button>
+                <button class="sync-btn" id="webdavSyncBtn" aria-label="立即上传备份到 WebDAV">立即上传备份</button>
+                <button class="sync-btn" id="webdavRestoreBtn" aria-label="从 WebDAV 恢复备份">恢复备份</button>
+            </div>
+        </div>
+
+        <!-- 自动同步设置（两个 tab 共享） -->
+        <div style="padding:0 20px 16px">
+            <div class="sync-auto-row">
+                <label class="sync-switch" for="autoSyncToggle">
+                    <input type="checkbox" id="autoSyncToggle" aria-label="启用自动同步">
+                    <span class="sync-switch-slider"></span>
+                </label>
+                <span class="sync-auto-label">自动同步</span>
+                <select class="sync-auto-interval" id="autoSyncInterval" aria-label="自动同步间隔">
+                    <option value="15">每 15 分钟</option>
+                    <option value="30">每 30 分钟</option>
+                    <option value="60">每 1 小时</option>
+                    <option value="360">每 6 小时</option>
+                    <option value="1440">每 24 小时</option>
+                </select>
+                <span style="font-size:11px;color:var(--text-3);flex:1;text-align:right">仅上传备份，不下载</span>
+            </div>
+            <div class="sync-status" id="syncStatus" role="status" aria-live="polite">就绪</div>
+        </div>
+    </div>
+</div>
+
+<!-- 恢复备份模态框 -->
+<div class="backup-modal" id="backupModal" role="dialog" aria-modal="true" aria-labelledby="backupModalTitle">
+    <div class="backup-card">
+        <div class="sync-header">
+            <div class="sync-header-title"><span>🗄️</span><span id="backupModalTitle">恢复备份</span></div>
+            <button class="sync-close" id="backupCloseBtn" aria-label="关闭">&times;</button>
+        </div>
+        <div class="backup-list" id="backupList">
+            <div class="backup-loading">正在加载备份列表...</div>
+        </div>
+    </div>
+</div>
+
+<!-- 右键上下文菜单（便签删除） -->
+<div class="ctx-menu" id="noteCtxMenu">
+    <div class="ctx-menu-item danger" data-action="delete">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        删除便签
+    </div>
+</div>
+
+<!-- 归档文件夹模态框 -->
+<div class="folder-modal" id="archiveModal" role="dialog" aria-modal="true" aria-labelledby="archiveModalTitle">
+    <div class="folder-card">
+        <div class="folder-header">
+            <div class="folder-title" id="archiveModalTitle"><span>🗄️</span><span>归档文件夹</span><span class="folder-count" id="archiveCount">0</span></div>
+            <button class="folder-close" id="archiveCloseBtn" aria-label="关闭">&times;</button>
+        </div>
+        <div class="folder-search-bar">
+            <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="archiveSearchInput" class="search-input" placeholder="搜索归档便签..." aria-label="搜索归档便签">
+        </div>
+        <div class="folder-list" id="archiveList">
+            <div class="folder-empty">暂无归档便签</div>
+        </div>
+    </div>
+</div>
+
+<!-- 垃圾桶模态框 -->
+<div class="folder-modal" id="trashModal" role="dialog" aria-modal="true" aria-labelledby="trashModalTitle">
+    <div class="folder-card">
+        <div class="folder-header">
+            <div class="folder-title" id="trashModalTitle"><span>🗑️</span><span>垃圾桶</span><span class="folder-count" id="trashCount">0</span></div>
+            <div class="folder-header-actions">
+                <button class="folder-clear-btn" id="trashClearBtn" title="清空垃圾桶">清空</button>
+                <button class="folder-close" id="trashCloseBtn" aria-label="关闭">&times;</button>
+            </div>
+        </div>
+        <div class="folder-search-bar">
+            <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="trashSearchInput" class="search-input" placeholder="搜索垃圾桶便签..." aria-label="搜索垃圾桶便签">
+        </div>
+        <div class="folder-list" id="trashList">
+            <div class="folder-empty">垃圾桶为空</div>
+        </div>
+    </div>
+</div>
+
+<!-- 聊天归档文件夹模态框 -->
+<div class="folder-modal" id="chatArchiveModal" role="dialog" aria-modal="true" aria-labelledby="chatArchiveModalTitle">
+    <div class="folder-card">
+        <div class="folder-header">
+            <div class="folder-title" id="chatArchiveModalTitle"><span>🗄️</span><span>聊天归档</span><span class="folder-count" id="chatArchiveCount">0</span></div>
+            <button class="folder-close" id="chatArchiveCloseBtn" aria-label="关闭">&times;</button>
+        </div>
+        <div class="folder-search-bar">
+            <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="chatArchiveSearchInput" class="search-input" placeholder="搜索归档聊天..." aria-label="搜索归档聊天">
+        </div>
+        <div class="folder-list" id="chatArchiveList">
+            <div class="folder-empty">暂无归档聊天</div>
+        </div>
+    </div>
+</div>
+
+<!-- 聊天垃圾桶模态框 -->
+<div class="folder-modal" id="chatTrashModal" role="dialog" aria-modal="true" aria-labelledby="chatTrashModalTitle">
+    <div class="folder-card">
+        <div class="folder-header">
+            <div class="folder-title" id="chatTrashModalTitle"><span>🗑️</span><span>聊天垃圾桶</span><span class="folder-count" id="chatTrashCount">0</span></div>
+            <div class="folder-header-actions">
+                <button class="folder-clear-btn" id="chatTrashClearBtn" title="清空聊天垃圾桶">清空</button>
+                <button class="folder-close" id="chatTrashCloseBtn" aria-label="关闭">&times;</button>
+            </div>
+        </div>
+        <div class="folder-search-bar">
+            <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="chatTrashSearchInput" class="search-input" placeholder="搜索垃圾桶聊天..." aria-label="搜索垃圾桶聊天">
+        </div>
+        <div class="folder-list" id="chatTrashList">
+            <div class="folder-empty">聊天垃圾桶为空</div>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== 软件锁锁屏覆盖层 ====================
+     锁定时全窗口遮挡，必须输入正确 PIN 才能继续使用
+     ============================================================ -->
+<div id="lockOverlay" class="lock-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="lockTitle">
+    <div class="lock-card">
+        <div class="lock-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <div class="lock-title" id="lockTitle">软件已锁定</div>
+        <div class="lock-subtitle" id="lockSubtitle">请输入 4 位 PIN 解锁</div>
+        <div class="lock-pin-inputs" id="lockPinInputs" role="group" aria-label="PIN 输入框">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="0" aria-label="PIN 第 1 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="1" aria-label="PIN 第 2 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="2" aria-label="PIN 第 3 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="3" aria-label="PIN 第 4 位">
+        </div>
+        <div class="lock-message" id="lockMessage" role="status" aria-live="polite"></div>
+        <div class="lock-actions">
+            <button class="lock-btn lock-submit-btn" id="lockSubmitBtn" aria-label="解锁软件">解锁</button>
+            <button class="lock-btn lock-exit-btn" id="lockExitBtn" aria-label="退出软件">退出软件</button>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== 设置 PIN 弹窗（首次设置或修改 PIN） ==================== -->
+<div id="setPinOverlay" class="lock-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="setPinTitle">
+    <div class="lock-card">
+        <div class="lock-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <div class="lock-title" id="setPinTitle">设置软件锁 PIN</div>
+        <div class="lock-subtitle">请输入 4 位数字 PIN</div>
+        <div class="lock-pin-inputs" id="setPinInputs" role="group" aria-label="设置 PIN 输入框">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="0" aria-label="设置 PIN 第 1 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="1" aria-label="设置 PIN 第 2 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="2" aria-label="设置 PIN 第 3 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="3" aria-label="设置 PIN 第 4 位">
+        </div>
+        <div class="lock-subtitle" style="margin-top:8px">再次输入确认</div>
+        <div class="lock-pin-inputs" id="setPinConfirmInputs" role="group" aria-label="确认 PIN 输入框">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="0" aria-label="确认 PIN 第 1 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="1" aria-label="确认 PIN 第 2 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="2" aria-label="确认 PIN 第 3 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="3" aria-label="确认 PIN 第 4 位">
+        </div>
+        <div class="lock-message" id="setPinMessage" role="status" aria-live="polite"></div>
+        <div class="lock-actions">
+            <button class="lock-btn lock-submit-btn" id="setPinConfirmBtn" aria-label="确认设置 PIN">确认设置</button>
+            <button class="lock-btn lock-exit-btn" id="setPinCancelBtn" aria-label="取消设置 PIN">取消</button>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== 开机启动开关面板（仿透明度面板风格） ==================== -->
+<div class="popup-panel opacity-panel" id="startupPanel">
+    <div class="op-label">开机启动</div>
+    <div class="op-row" style="justify-content:space-between">
+        <span style="font-size:12px;color:var(--text-2)">开机自动启动到托盘</span>
+        <label class="startup-toggle" for="startupToggle">
+            <input type="checkbox" id="startupToggle" aria-label="开机自动启动">
+            <span class="startup-slider"></span>
+        </label>
+    </div>
+</div>
+
+<script src="marked.min.js" defer></script>
+<script src="purify.min.js" defer></script>
+<script src="howler.min.js" defer></script>
+<script src="shared-utils.js" defer></script>
+<script src="calendar.js" defer></script>
+<script src="music-tab.js" defer></script>
+<script src="radio-tab.js" defer></script>
+<script src="renderer.js" defer></script>
+</body>
+</html>
