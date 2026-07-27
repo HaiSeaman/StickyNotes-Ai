@@ -15,6 +15,11 @@ const { parseNodeStream } = require('music-metadata-browser');
 // 加载时立即劫持 console 并注册 process 异常处理，所有 console.log/warn/error 自动旁路记录
 const logger = require('./logger');
 
+const { registerAiHandlers } = require('./services/aiService');
+const { buildWebdavRequestContext, webdavRequest, parseWebdavPropfindXml } = require('./services/syncService');
+const { serveLocalFile, cleanTtsCache, saveAudioToTtsCache } = require('./main/protocol');
+const { getOverlayLoggerScript, getPopoutCommonCss, buildPopoutHtml } = require('./main/popoutTemplate');
+
 /* ==================== 全局变量 ==================== */
 let mainWindow = null;
 let tray = null;
@@ -89,111 +94,7 @@ const TTS_CACHE_MAX_SIZE = 100 * 1024 * 1024;            // 100MB
  * @param {boolean} [options.requireRealpath=false] - 是否做 realpath 符号链接二次校验
  * @returns {Promise<Response>} Electron 协议 Response 对象
  */
-async function serveLocalFile(requestUrl, dir, mimeMap, options) {
-    options = options || {};
-    const defaultMime = options.defaultMime || 'application/octet-stream';
-    const maxSize = options.maxSize || 0;
-    const requireRealpath = options.requireRealpath || false;
 
-    const url = new URL(requestUrl);
-    const fileName = decodeURIComponent(url.pathname.slice(1));
-    const filePath = path.normalize(path.join(dir, fileName));
-    // 路径穿越防护：解析后路径必须在目标目录内，杜绝 ../../etc/passwd 之类
-    if (filePath !== dir && !filePath.startsWith(dir + path.sep)) {
-        return new Response('Forbidden', { status: 403 });
-    }
-    // 异步 stat：合并存在性 + 文件类型 + 大小校验，避免同步 I/O 阻塞主进程
-    let fileStat;
-    try {
-        fileStat = await fs.promises.stat(filePath);
-    } catch (_) {
-        return new Response('Not Found', { status: 404 });
-    }
-    if (!fileStat.isFile()) {
-        return new Response('Not Found', { status: 404 });
-    }
-    // 大小校验：超过上限拒绝读取，防止超大文件把渲染进程内存撑爆
-    if (maxSize > 0 && fileStat.size > maxSize) {
-        return new Response('Payload Too Large', { status: 413 });
-    }
-    // realpath 二次校验：防止 symlink 把访问重定向到目录外
-    if (requireRealpath) {
-        try {
-            const realPath = await fs.promises.realpath(filePath);
-            const realDir = await fs.promises.realpath(dir);
-            if (realPath !== realDir && !realPath.startsWith(realDir + path.sep)) {
-                return new Response('Forbidden', { status: 403 });
-            }
-        } catch (_) {
-            return new Response('Not Found', { status: 404 });
-        }
-    }
-    const ext = path.extname(fileName).toLowerCase();
-    const contentType = mimeMap[ext] || defaultMime;
-    // 异步读取：避免 readFileSync 阻塞主进程导致多文件加载时 UI 卡顿
-    const buffer = await fs.promises.readFile(filePath);
-    return new Response(buffer, { headers: { 'Content-Type': contentType, 'Cache-Control': 'max-age=3600' } });
-}
-
-/**
- * 静默清理 TTS 缓存：删除超过 7 天的文件；若总大小超 100MB 从最旧开始删直至达标。
- * 全程异步 fs.promises（不阻塞主进程），任何异常仅 console.error 吞掉，不影响启动。
- * @returns {Promise<{deleted: number}>} 实际删除的文件数
- */
-async function cleanTtsCache() {
-    const dir = getTtsCacheDir();
-    let deleted = 0;
-    try {
-        const entries = await fs.promises.readdir(dir);
-        const now = Date.now();
-        // 并行 stat 所有文件，收集 {name, mtime, size}
-        const stats = await Promise.all(entries.map(async (name) => {
-            try {
-                const filePath = path.join(dir, name);
-                const st = await fs.promises.stat(filePath);
-                return { name, filePath, mtime: st.mtimeMs, size: st.size, isFile: st.isFile() };
-            } catch (_) {
-                return null;  // stat 失败的项跳过（可能已被删或权限问题）
-            }
-        }));
-        const files = stats.filter(s => s && s.isFile);
-        // 第一轮：删过期文件（mtime 超 7 天）
-        for (const f of files) {
-            if (now - f.mtime > TTS_CACHE_MAX_AGE_MS) {
-                try { await fs.promises.unlink(f.filePath); deleted++; } catch (_) {}
-            }
-        }
-        // 第二轮：总量超 100MB 时，按 mtime 升序从最旧开始删
-        const remaining = files.filter(f => now - f.mtime <= TTS_CACHE_MAX_AGE_MS);
-        let totalSize = remaining.reduce((sum, f) => sum + f.size, 0);
-        remaining.sort((a, b) => a.mtime - b.mtime);  // 最旧在前
-        for (const f of remaining) {
-            if (totalSize <= TTS_CACHE_MAX_SIZE) break;
-            try { await fs.promises.unlink(f.filePath); totalSize -= f.size; deleted++; } catch (_) {}
-        }
-    } catch (e) {
-        // 目录不存在或读取失败属正常情况（首次使用尚未生成任何音频），静默吞掉
-        if (e.code !== 'ENOENT') console.error('清理 TTS 缓存失败:', e.message);
-    }
-    return { deleted };
-}
-
-/**
- * 将音频 Buffer 异步落盘到 tts_cache/，返回 ttsfile:// URL。
- * 文件名带时间戳 + 随机后缀，避免高频合成时碰撞。
- * @param {Buffer} audioBuffer - 音频字节
- * @param {string} ext - 文件扩展名（不含点，如 'mp3'）
- * @returns {Promise<string>} ttsfile:// URL，可直接赋给 <audio>.src
- */
-async function saveAudioToTtsCache(audioBuffer, ext) {
-    const dir = getTtsCacheDir();
-    // 异步递归创建目录，避免同步 mkdirSync 阻塞主进程
-    await fs.promises.mkdir(dir, { recursive: true });
-    const fileName = 'tts_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex') + '.' + (ext || 'mp3');
-    const filePath = path.join(dir, fileName);
-    await fs.promises.writeFile(filePath, audioBuffer);
-    return 'ttsfile://tts_cache/' + encodeURIComponent(fileName);
-}
 
 /* ==================== chatimg 自定义协议 ====================
  * 渲染进程通过 <img src="chatimg://chat-images/<filename>"> 直接加载本地图片，
@@ -739,196 +640,14 @@ function togglePopoutPin(noteId, type) {
  * 注意：body 与 .titlebar 因 opacity/rgba 差异，由各 builder 自行定义，不在此处合并。
  * 严禁"顺手优化"任何属性值（配色、数值、顺序必须逐字等价）。
  */
-function getPopoutCommonCss() {
-    return `*{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;overflow:hidden;font-family:"Segoe UI","Microsoft YaHei UI",sans-serif;-webkit-font-smoothing:antialiased}
-.titlebar-title{
-    font-size:12px;font-weight:600;color:#333;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    max-width:200px;user-select:none;-webkit-user-select:none;
-}
-.titlebar-actions{display:flex;gap:4px;-webkit-app-region:no-drag}
-.tb-btn{
-    width:22px;height:22px;border:none;background:transparent;
-    color:#555;cursor:pointer;border-radius:4px;
-    display:flex;align-items:center;justify-content:center;
-    transition:all 0.18s ease;
-}
-.tb-btn:hover{background:rgba(0,0,0,0.08);color:#000}
-.tb-btn.close:hover{background:#FF453A;color:#FFFFFF}
-.tb-btn.pin.active{background:rgba(10,132,255,0.18);color:#0A84FF}`;
-}
+
 
 /**
  * 读取 overlay-logger.js 内容并缓存，供 popout 内联 HTML 注入。
  * popout 窗口使用 data: URL 加载，CSP 仅允许 'unsafe-inline'，无法 <script src> 外部文件，
  * 因此在主进程读取文件内容后作为内联 <script> 注入到 HTML 字符串中。
  */
-let _overlayLoggerScriptCache = null;
-function getOverlayLoggerScript() {
-    if (_overlayLoggerScriptCache) return _overlayLoggerScriptCache;
-    try {
-        let raw = fs.readFileSync(path.join(__dirname, 'overlay-logger.js'), 'utf8');
-        // 关键转义：把 </script> 替换成 <\/script>
-        // 原因：overlay-logger.js 的注释里含 "<script src=...></script>" 文本，
-        // 当本文件内容被内联到 buildPopoutHtml 的 <script> 标签时，
-        // HTML 解析器会把注释里的 </script> 当成真正的闭合标签，导致 script 提前结束，
-        // 后续源代码被当成 body 文本显示（用户看到"日志信息"），业务脚本不执行（无法关闭/输入）。
-        // 转义后 <\/script> 在 JS 运行时仍是 "</script>"，不影响代码逻辑。
-        raw = raw.replace(/<\/script>/gi, '<\\/script>');
-        _overlayLoggerScriptCache = raw;
-    } catch (e) {
-        _overlayLoggerScriptCache = '';
-        console.error('[main] 读取 overlay-logger.js 失败:', e.message);
-    }
-    return _overlayLoggerScriptCache;
-}
 
-function buildPopoutHtml(data) {
-    // 完整 HTML 转义（含 " ' &），防止 title/content 在属性或文本上下文注入 XSS
-    const title = escapeHtmlFull(data.title || '便签');
-    const content = escapeHtmlFull(data.content || '');
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>${title}</title>
-<style>
-${getPopoutCommonCss()}
-body{
-    background:rgba(250,250,252,0.78);
-    backdrop-filter:blur(20px) saturate(160%);
-    -webkit-backdrop-filter:blur(20px) saturate(160%);
-    border-radius:10px;
-    border:1px solid rgba(255,255,255,0.4);
-    box-shadow:0 8px 32px rgba(0,0,0,0.18);
-    display:flex;flex-direction:column;
-    -webkit-app-region:no-drag;
-}
-.titlebar{
-    height:32px;flex-shrink:0;
-    display:flex;align-items:center;justify-content:space-between;
-    padding:0 10px;
-    background:rgba(255,255,255,0.35);
-    border-bottom:1px solid rgba(0,0,0,0.06);
-    border-radius:10px 10px 0 0;
-    -webkit-app-region:drag;
-    cursor:move;
-}
-.content-wrap{flex:1;display:flex;min-height:0}
-textarea{
-    flex:1;width:100%;height:100%;
-    padding:12px 14px;border:none;outline:none;resize:none;
-    background:transparent;color:#1A1A1A;
-    font-size:14px;line-height:1.65;font-family:inherit;
-    user-select:text;-webkit-user-select:text;
-}
-textarea::placeholder{color:#999}
-.status-bar{
-    height:20px;flex-shrink:0;
-    padding:0 10px;
-    display:flex;align-items:center;justify-content:space-between;
-    background:rgba(255,255,255,0.3);
-    border-top:1px solid rgba(0,0,0,0.04);
-    border-radius:0 0 10px 10px;
-    font-size:10px;color:#888;
-    user-select:none;-webkit-user-select:none;
-}
-.status-tip{opacity:0.7}
-.status-saved{color:#34C759;font-weight:600;opacity:0;transition:opacity 0.3s}
-.status-saved.show{opacity:1}
-</style></head>
-<body>
-<div class="titlebar">
-    <div class="titlebar-title" title="${title}">📌 ${title}</div>
-    <div class="titlebar-actions">
-        <button class="tb-btn pin active" id="pinBtn" title="已置顶（点击取消置顶）"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.5-3V8a3.5 3.5 0 0 0-7 0v6L5 17z"/></svg></button>
-        <button class="tb-btn close" id="closeBtn" title="关闭并同步回主窗口"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-</div>
-<div class="content-wrap">
-    <textarea id="content" placeholder="在此输入便签内容..." spellcheck="true">${content}</textarea>
-</div>
-<div class="status-bar">
-    <span class="status-tip">双击标题栏 = 缩回主窗口 · 默认置顶</span>
-    <span class="status-saved" id="savedTip">✓ 已同步</span>
-</div>
-<script>
-// 日志劫持：批量上报 popout 窗口日志（source='popout-note'），复用 overlay-logger.js 共享模块
-${getOverlayLoggerScript()}
-setupOverlayLogging({
-    source: 'popout-note',
-    reportApi: function(batch) { return window.popout.reportLogs(batch); },
-    errorPrefix: 'popout未捕获异常:'
-});
-// 安全模式：通过 preload 暴露的 window.popout API 与主进程通信
-// 不再直接 require('electron')，杜绝 RCE 风险
-const noteId = ${JSON.stringify(String(data.noteId))};
-const contentEl = document.getElementById('content');
-const savedTip = document.getElementById('savedTip');
-const closeBtn = document.getElementById('closeBtn');
-const pinBtn = document.getElementById('pinBtn');
-let debounceTimer = null;
-
-// 输入防抖同步给主窗口
-contentEl.addEventListener('input', () => {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-        window.popout.sendInput({ noteId, content: contentEl.value });
-        showSaved();
-    }, 400);
-});
-
-function showSaved() {
-    savedTip.classList.add('show');
-    setTimeout(() => savedTip.classList.remove('show'), 1200);
-}
-
-// 关闭按钮
-closeBtn.addEventListener('click', () => {
-    window.popout.sendInput({ noteId, content: contentEl.value });
-    window.popout.close();
-});
-
-// 置顶切换按钮
-pinBtn.addEventListener('click', async () => {
-    try {
-        const r = await window.popout.togglePin({ noteId, type: 'note' });
-        if (r && r.success) {
-            pinBtn.classList.toggle('active', r.pinned);
-            pinBtn.title = r.pinned ? '已置顶（点击取消置顶）' : '未置顶（点击置顶）';
-        }
-    } catch (_) {}
-});
-
-// 双击标题栏 = 关闭（缩回主窗口）
-document.querySelector('.titlebar').addEventListener('dblclick', () => {
-    window.popout.sendInput({ noteId, content: contentEl.value });
-    window.popout.close();
-});
-
-// 监听主进程推送的内容更新（主窗口内容变了会推送给小窗口）
-window.popout.onPush((data) => {
-    if (data && data.content !== undefined && data.content !== contentEl.value) {
-        contentEl.value = data.content;
-    }
-});
-
-// 监听主进程推送的置顶状态变化（外部 API 调用时同步 UI）
-window.popout.onPinChanged((data) => {
-    if (data && data.pinned !== undefined) {
-        pinBtn.classList.toggle('active', data.pinned);
-        pinBtn.title = data.pinned ? '已置顶（点击取消置顶）' : '未置顶（点击置顶）';
-    }
-});
-
-// Ctrl+Enter 也能关闭
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        window.popout.sendInput({ noteId, content: contentEl.value });
-        window.popout.close();
-    }
-});
-</script>
-</body></html>`;
-}
 
 /**
  * 构建待办事项小窗口的 HTML
@@ -1856,110 +1575,9 @@ async function downloadS3Backup(config, key) {
     return Buffer.concat(chunks);
 }
 
-/**
- * 构造 WebDAV 请求的公共上下文（URL 解析 + auth + agent + lib 选择）
- * 5 个 WebDAV 函数共享此前置逻辑。在 Promise executor 内调用，
- * 若 URL 解析失败会 throw Error（被 Promise 自动捕获为 reject，等价于原 reject+return）。
- *
- * @param {Object} config - WebDAV 配置 { url, user, pass, allowSelfSigned }
- * @returns {{ baseUrl: string, auth: string, allowSelfSigned: boolean, urlObj: URL, lib: object, agent: object }}
- */
-function buildWebdavRequestContext(config) {
-    const baseUrl = trimTrailingSlash(config.url);
-    const auth = Buffer.from(config.user + ':' + config.pass).toString('base64');
-    const allowSelfSigned = !!(config.allowSelfSigned);
+// 重用 services/syncService.js 模块中导出的 WebDAV 工具函数，避免重复声明
 
-    let urlObj;
-    try {
-        urlObj = new URL(baseUrl);
-    } catch (e) {
-        throw new Error('WebDAV 地址格式错误：' + e.message);
-    }
-
-    const lib = urlObj.protocol === 'https:' ? https : http;
-    // 安全警告：http:// 明文协议下 Basic Auth 凭据会以明文经网络传输
-    if (urlObj.protocol === 'http:') {
-        console.warn('[安全警告] WebDAV 使用 http:// 明文协议，Basic Auth 凭据将以明文传输，建议改用 https://');
-    }
-    const agent = new lib.Agent({ rejectUnauthorized: !allowSelfSigned });
-
-    return { baseUrl, auth, allowSelfSigned, urlObj, lib, agent };
-}
-
-/**
- * WebDAV 公共请求函数：封装 buildWebdavRequestContext + http.request + agent 清理。
- * 替代 uploadToWebdav/testWebdavConnection 等函数中重复的 opts 构造与 agent.destroy 样板。
- *
- * @param {Object}  config    - WebDAV 配置（同 buildWebdavRequestContext）
- * @param {string}  method    - HTTP 方法（PUT/GET/DELETE/MKCOL/PROPFIND 等）
- * @param {string}  reqPath   - 已 encode 的请求路径
- * @param {Object}  [options]
- * @param {Object}  [options.headers] - 请求头
- * @param {string|Buffer} [options.body] - 请求体
- * @param {number}  [options.timeoutMs=30000] - 超时毫秒
- * @param {number}  [options.maxSize=0] - 响应体大小上限（0 表示不限制），超限会中断并 reject
- * @returns {Promise<{statusCode:number, statusMessage:string, headers:Object, body:Buffer}>}
- */
-function webdavRequest(config, method, reqPath, options) {
-    options = options || {};
-    const headers = options.headers || {};
-    const body = options.body || null;
-    const timeoutMs = options.timeoutMs || 30000;
-    const maxSize = options.maxSize || 0;
-    return new Promise((resolve, reject) => {
-        const ctx = buildWebdavRequestContext(config);
-        const opts = {
-            method: method,
-            hostname: ctx.urlObj.hostname,
-            port: ctx.urlObj.port || (ctx.urlObj.protocol === 'https:' ? 443 : 80),
-            path: reqPath,
-            headers: headers,
-            timeout: timeoutMs,
-            agent: ctx.agent,
-            rejectUnauthorized: !ctx.allowSelfSigned
-        };
-        const req = ctx.lib.request(opts, (res) => {
-            // 大小上限预检：Content-Length 超限直接拒绝，避免下载超大文件撑爆内存
-            if (maxSize > 0) {
-                const contentLength = parseInt(res.headers['content-length'] || '0', 10);
-                if (contentLength > maxSize) {
-                    try { ctx.agent.destroy(); } catch (_) {}
-                    try { req.destroy(); } catch (_) {}
-                    reject(new Error(`备份文件过大（${(contentLength / 1024 / 1024).toFixed(1)}MB），超过 ${(maxSize / 1024 / 1024).toFixed(0)}MB 上限`));
-                    return;
-                }
-            }
-            const chunks = [];
-            let totalSize = 0;
-            let aborted = false;
-            res.on('data', (c) => {
-                if (aborted) return;
-                totalSize += c.length;
-                // 累计大小超限即中断，防止服务器不返回 Content-Length 或谎报
-                if (maxSize > 0 && totalSize > maxSize) {
-                    aborted = true;
-                    try { ctx.agent.destroy(); } catch (_) {}
-                    try { req.destroy(); } catch (_) {}
-                    reject(new Error(`下载过程中超过 ${(maxSize / 1024 / 1024).toFixed(0)}MB 上限，已中断`));
-                    return;
-                }
-                chunks.push(c);
-            });
-            res.on('end', () => {
-                if (aborted) return;
-                try { ctx.agent.destroy(); } catch (_) {}
-                resolve({ statusCode: res.statusCode, statusMessage: res.statusMessage, headers: res.headers, body: Buffer.concat(chunks) });
-            });
-        });
-        req.on('timeout', () => { req.destroy(new Error('请求超时')); });
-        req.on('error', (err) => {
-            try { ctx.agent.destroy(); } catch (_) {}
-            reject(err);
-        });
-        if (body) req.write(body);
-        req.end();
-    });
-}
+// 重用 services/syncService.js 模块中导出的 webdavRequest 工具函数
 
 /**
  * WebDAV 上传（HTTP PUT + Basic Auth）
@@ -2112,23 +1730,24 @@ function listWebdavBackups(config) {
         // 注意：href 保留原始 encoded 形式（不 decode），直接用于后续 DELETE/GET 请求
         // 否则中文路径会因未 encode 导致 HTTP 400
         const items = [];
-        const responses = bodyStr.split(/<[^>]*:response>/i).slice(1);
-        for (const respBlock of responses) {
-            const hrefMatch = /<[^>]*:href[^>]*>([^<]+)<\/[^>]*:href>/i.exec(respBlock);
+        // 匹配任意 namespace 前缀或无前缀的 <...response> 到 </...response>
+        const responseBlocks = bodyStr.match(/<([^:>]+:)?response[\s>][\s\S]*?<\/([^:>]+:)?response>/gi) || [];
+        for (const respBlock of responseBlocks) {
+            const hrefMatch = /<([^:>]+:)?href[^>]*>([^<]+)<\/([^:>]+:)?href>/i.exec(respBlock);
             if (!hrefMatch) continue;
-            const href = hrefMatch[1];  // 保留原始 encoded 形式
+            const href = hrefMatch[2];  // 保留原始 encoded 形式
             // 检测 .zip 结尾时要考虑 encoded 后可能含 %2E 等情况，先 decode 再判断
             const decodedHref = decodeURIComponent(href);
             if (!decodedHref.endsWith('.zip')) continue;
             const name = decodedHref.split('/').pop();  // 显示用解码后的文件名
             if (!name) continue;
-            const sizeMatch = /<[^>]*:getcontentlength[^>]*>([^<]+)<\/[^>]*:getcontentlength>/i.exec(respBlock);
-            const modMatch = /<[^>]*:getlastmodified[^>]*>([^<]+)<\/[^>]*:getlastmodified>/i.exec(respBlock);
+            const sizeMatch = /<([^:>]+:)?getcontentlength[^>]*>([^<]+)<\/([^:>]+:)?getcontentlength>/i.exec(respBlock);
+            const modMatch = /<([^:>]+:)?getlastmodified[^>]*>([^<]+)<\/([^:>]+:)?getlastmodified>/i.exec(respBlock);
             items.push({
                 name: name,         // 解码后的文件名（仅用于显示）
                 href: href,         // 原始 encoded 形式（用于 DELETE/GET）
-                size: sizeMatch ? parseInt(sizeMatch[1], 10) || 0 : 0,
-                lastModified: modMatch ? modMatch[1] : ''
+                size: sizeMatch ? parseInt(sizeMatch[2], 10) || 0 : 0,
+                lastModified: modMatch ? modMatch[2] : ''
             });
         }
         // 按修改时间倒序

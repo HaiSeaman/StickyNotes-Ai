@@ -5651,7 +5651,7 @@ function renderAlarmList() {
         }
         // 铃声名称映射
         const soundNames = { default: '默认叮咚', apple: '苹果风格', android: '安卓风格', nokia: '诺基亚经典', crystal: '清脆铃声', bird: '鸟鸣', electronic: '电子闹钟' };
-        const soundName = soundNames[a.sound] || '默认叮咚';
+        const soundName = escapeHtml(soundNames[a.sound] || '默认叮咚');
         // 文字说明
         const labelHtml = a.label ? `<span style="color:var(--text-2)"> · ${escapeHtml(a.label)}</span>` : '';
         div.innerHTML = `

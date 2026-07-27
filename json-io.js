@@ -4,6 +4,7 @@
  * console 调用会被 logger.js 劫持旁路记录，无需额外处理。
  * =============================================== */
 const fs = require('fs');
+const crypto = require('crypto');
 
 /**
  * 同步读取 JSON 文件。
@@ -42,7 +43,8 @@ function loadJSON(filePath, fallback) {
  */
 async function saveJSON(filePath, data) {
     try {
-        const tmp = filePath + '.tmp';
+        const uniqueId = process.pid + '-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+        const tmp = filePath + '.' + uniqueId + '.tmp';
         await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');
         let lastErr = null;
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -81,7 +83,8 @@ async function saveJSON(filePath, data) {
  */
 function saveJSONSync(filePath, data) {
     try {
-        const tmp = filePath + '.tmp';
+        const uniqueId = process.pid + '-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+        const tmp = filePath + '.' + uniqueId + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
         try {
             fs.renameSync(tmp, filePath);

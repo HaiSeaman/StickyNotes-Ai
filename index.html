@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https: ttsfile:; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: chatimg: musicfile: https:; media-src 'self' data: ttsfile: musicfile: https: http:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'">
 <title>便签</title>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles/variables.css">
+    <link rel="stylesheet" href="styles/components.css">
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <div class="window" id="window">
@@ -1090,6 +1092,9 @@
 <script src="calendar.js" defer></script>
 <script src="music-tab.js" defer></script>
 <script src="radio-tab.js" defer></script>
+<script src="renderer/soundEffects.js" defer></script>
+<script src="renderer/securityPin.js" defer></script>
+<script src="renderer/themePalette.js" defer></script>
 <script src="renderer.js" defer></script>
 </body>
 </html>

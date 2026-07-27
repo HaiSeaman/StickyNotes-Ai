@@ -1,3 +1,6 @@
+@import "styles/variables.css";
+@import "styles/components.css";
+
 /* ==================== 设计变量 ==================== */
 :root{
     --bg-deep:#faf9f6;
