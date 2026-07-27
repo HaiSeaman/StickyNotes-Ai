@@ -49,6 +49,9 @@ function appendLog(level, args, source) {
         if (logBuffer.length > LOG_BUFFER_MAX) logBuffer.shift();
         if (logFileReady) {
             logPendingFlush.push(line);
+            if (logPendingFlush.length > 1000) {
+                logPendingFlush.shift(); // 内存上限保护：超过1000条丢弃最旧日志防OOM
+            }
             if (logPendingFlush.length >= LOG_FILE_FLUSH_THRESHOLD) {
                 flushLogFile();
             }

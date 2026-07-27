@@ -655,8 +655,8 @@ function togglePopoutPin(noteId, type) {
  */
 function buildTodoPopoutHtml(data) {
     const title = escapeHtmlFull(data.title || '待办事项');
-    // 序列化 todos 为 JSON 字符串（安全）
-    const todosJson = JSON.stringify(data.todos || []);
+    // 序列化 todos 为 JSON 字符串（转义 </script> 防内联脚本 Breakout XSS）
+    const todosJson = JSON.stringify(data.todos || []).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>${title}</title>
 <style>
 ${getPopoutCommonCss()}
@@ -5163,6 +5163,13 @@ let quitRetryCount = 0;
 const MAX_QUIT_RETRY = 10;
 const QUIT_RETRY_INTERVAL = 200;  // ms
 app.on('before-quit', (e) => {
+    // 退出前通知主窗口渲染进程立即强行刷盘存盘未落盘的内容
+    try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('app-saving-before-quit');
+        }
+    } catch (_) {}
+
     if (isPendingSave() && quitRetryCount < MAX_QUIT_RETRY) {
         e.preventDefault();
         quitRetryCount++;

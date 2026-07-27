@@ -69,6 +69,8 @@ contextBridge.exposeInMainWorld('api', {
     // 闹钟响铃时恢复并聚焦主窗口（从托盘/最小化中唤起）
     showWindowForAlarm: makeInvoke('alarm:show-window'),
 
+    onAppSavingBeforeQuit: makeListener('app-saving-before-quit'),
+
     /* ===== 置顶 ===== */
     togglePin: makeInvoke('toggle-pin'),
     getPinState: makeInvoke('get-pin-state'),

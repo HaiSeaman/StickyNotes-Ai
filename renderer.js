@@ -433,10 +433,10 @@ window.addEventListener('beforeunload', () => {
         try { window.api.saveNotes(notes); } catch (_) {}
     }
     // 待办小窗口独立计时器也需在退出时 flush，防 todo 数据丢失
-    if (todoSaveTimer && contentDirty) {
+    if (todoSaveTimer) {
         clearTimeout(todoSaveTimer);
         todoSaveTimer = null;
-        try { window.api.saveNotes(notes); } catch (_) {}
+        try { window.api.saveTodos(todos); } catch (_) {}
     }
     // 3. debounce() 实例的 flush（透明度滑块等；搜索防抖不涉及持久化，无需 flush）
     try { if (typeof debouncedSetOpacity !== 'undefined' && debouncedSetOpacity.flush) debouncedSetOpacity.flush(); } catch (_) {}
@@ -444,6 +444,22 @@ window.addEventListener('beforeunload', () => {
     if (clockTimerId) { clearInterval(clockTimerId); clockTimerId = null; }
     if (alarmTimerId) { clearInterval(alarmTimerId); alarmTimerId = null; }
 });
+
+// 监听主进程退出前的强行刷盘通知
+if (window.api && window.api.onAppSavingBeforeQuit) {
+    window.api.onAppSavingBeforeQuit(() => {
+        if (saveTimer && contentDirty) {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+            try { window.api.saveNotes(notes); } catch (_) {}
+        }
+        if (todoSaveTimer) {
+            clearTimeout(todoSaveTimer);
+            todoSaveTimer = null;
+            try { window.api.saveTodos(todos); } catch (_) {}
+        }
+    });
+}
 
 /* ==================== 数据持久化 ==================== */
 // 串行化保存：保存期间若有新保存请求，标记 pending，待当前保存结束后再来一次，

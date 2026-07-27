@@ -544,6 +544,10 @@
             if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
         }
         playlist.splice(index, 1);
+        // 修正随机历史记录中的索引，防止切上一首时越界或播错
+        shuffleHistory = shuffleHistory
+            .filter(i => i !== index)
+            .map(i => (i > index ? i - 1 : i));
         if (wasCurrent) {
             // 删除的就是当前曲：若后面还有曲（已前移到 index），直接播它；否则停止
             if (index < playlist.length) {

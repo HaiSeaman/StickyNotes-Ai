@@ -13,7 +13,7 @@ async function serveLocalFile(requestUrl, dir, mimeMap, options) {
     options = options || {};
     const defaultMime = options.defaultMime || 'application/octet-stream';
     const maxSize = options.maxSize || 0;
-    const requireRealpath = options.requireRealpath || false;
+    const requireRealpath = options.requireRealpath !== undefined ? options.requireRealpath : true;
 
     const url = new URL(requestUrl);
     const fileName = decodeURIComponent(url.pathname.slice(1));

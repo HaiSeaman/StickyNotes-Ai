@@ -109,7 +109,7 @@ setupOverlayLogging({
     reportApi: function(batch) { return window.popout.reportLogs(batch); },
     errorPrefix: 'popout未捕获异常:'
 });
-const noteId = ${JSON.stringify(String(data.noteId))};
+const noteId = ${JSON.stringify(String(data.noteId)).replace(/<\/script>/gi, '<\\/script>')};
 const contentEl = document.getElementById('content');
 const savedTip = document.getElementById('savedTip');
 const closeBtn = document.getElementById('closeBtn');
