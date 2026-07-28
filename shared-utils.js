@@ -55,3 +55,23 @@ function isToday(iso) {
 function swallow(fn, label) {
     try { return fn(); } catch (e) { if (label) console.warn('[' + label + ']', e.message || e); }
 }
+
+/**
+ * 去除字符串末尾的斜杠（统一处理 baseUrl 等场景）
+ * @param {string} s - 原始 URL 或字符串
+ * @returns {string} 去除末尾斜杠后的字符串
+ */
+function trimTrailingSlash(s) {
+    return (s || '').trim().replace(/\/+$/, '');
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        genId,
+        previewText,
+        toISODate,
+        isToday,
+        swallow,
+        trimTrailingSlash
+    };
+}

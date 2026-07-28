@@ -49,6 +49,7 @@ const {
 
 // JSON 文件原子读写（loadJSON / saveJSON / saveJSONSync）：损坏自动备份 + Windows EPERM 重试
 const { loadJSON, saveJSON, saveJSONSync } = require('./json-io');
+const { trimTrailingSlash } = require('./shared-utils');
 
 /* ==================== 文件路径 ====================
  * 所有 getXxxPath / getXxxDir 已迁移至 paths.js，通过解构导入。
@@ -775,7 +776,6 @@ setupOverlayLogging({
     errorPrefix: 'popout未捕获异常:'
 });
 // 安全模式：通过 preload 暴露的 window.popout API 与主进程通信
-// 不再直接 require('electron')，杜绝 RCE 风险
 const noteId = ${JSON.stringify(String(data.noteId))};
 let todos = ${todosJson};
 let syncTimer = null;
@@ -1220,10 +1220,8 @@ let isSyncing = false;
 
 /* ==================== 通用工具函数 ==================== */
 
-// 去除字符串末尾的斜杠（统一处理 baseUrl 等场景）
-function trimTrailingSlash(s) {
-    return (s || '').trim().replace(/\/+$/, '');
-}
+// 去除字符串末尾的斜杠（统一处理 baseUrl 等场景），从 shared-utils 导入
+/* function trimTrailingSlash 已经在 shared-utils.js 中定义并导出 */
 
 // 同步凭据加解密（与 AI Key 一致的安全等级，避免明文落盘）
 // label 参数用于错误消息中区分凭据类型（默认 '凭据'，AI Key 场景传 'API Key'）
