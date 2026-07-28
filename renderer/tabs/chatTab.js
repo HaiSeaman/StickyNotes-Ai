@@ -90,7 +90,7 @@
                     if (textEl) textEl.textContent = origText || '复制';
                     copyBtn.classList.remove('copied');
                 }, 1200);
-            } catch (_) {}
+            } catch (e) { console.warn('复制聊天内容失败:', e.message); }
         });
         el.appendChild(copyBtn);
         return el;
@@ -526,7 +526,7 @@
             if (window.api && typeof window.api.abortChat === 'function') {
                 try {
                     window.api.abortChat();
-                } catch (_) {}
+                } catch (e) { console.warn('中断聊天请求失败:', e.message); }
             }
         }
     }

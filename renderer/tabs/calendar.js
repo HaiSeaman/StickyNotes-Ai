@@ -770,7 +770,7 @@
         // 销毁模块时调用：断开 ResizeObserver，防止窗口关闭后回调还触发导致报错
         destroy: () => {
             if (hmResizeObserver) {
-                try { hmResizeObserver.disconnect(); } catch (_) {}
+                try { hmResizeObserver.disconnect(); } catch (e) { console.warn('断开 ResizeObserver 失败:', e.message); }
                 hmResizeObserver = null;
             }
             if (hmResizeTimer) { clearTimeout(hmResizeTimer); hmResizeTimer = null; }

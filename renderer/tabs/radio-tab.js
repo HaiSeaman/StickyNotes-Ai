@@ -90,7 +90,7 @@
                     entries: [{ level: String(level).toUpperCase(), msg: msg.slice(0, 2000), ts: Date.now() }]
                 }).catch(() => {});  // 日志上报失败静默忽略，避免 unhandled rejection
             }
-        } catch (_) { /* 日志上报失败不影响业务 */ }
+        } catch (e) { console.warn('日志上报失败:', e.message); }
     }
 
     function findStationIndexByUrl(list, url) {
@@ -989,7 +989,7 @@
                 }
                 lastBufferedEnd = currentBufferedEnd;
                 lastSampleTime = now;
-            } catch (_) { /* buffered 访问异常时静默忽略 */ }
+            } catch (e) { console.warn('获取缓冲进度失败:', e.message); }
         }, 1000);
     }
 

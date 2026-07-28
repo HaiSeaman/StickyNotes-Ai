@@ -188,7 +188,7 @@ function createSunIcon(size) {
             const img = nativeImage.createFromBitmap(buf, { width: size, height: size });
             if (img && !img.isEmpty()) return img;
         }
-    } catch (_) { /* fallback */ }
+    } catch (e) { console.warn('生成图标失败:', e.message); /* fallback */ }
 
     // 仅小尺寸有 dataURL 像素兜底；大尺寸无兜底（返回 null，由调用方处理）
     if (!isLarge) {
@@ -235,11 +235,11 @@ async function parseSSEStream(resp, onChunk) {
                 if (!line.startsWith('data:')) continue;      // 只处理 data: 帧
                 const data = line.slice(5).trim();
                 if (data === '[DONE]') continue;              // OpenAI 流结束标记
-                try { onChunk(JSON.parse(data)); } catch (_) { /* 单行解析失败跳过 */ }
+                try { onChunk(JSON.parse(data)); } catch (e) { console.warn('解析SSE行失败:', e.message); /* 单行解析失败跳过 */ }
             }
         }
     } finally {
-        try { reader.releaseLock(); } catch (_) {}
+        try { reader.releaseLock(); } catch (e) { console.warn('释放流锁失败:', e.message); }
     }
 }
 
@@ -333,7 +333,7 @@ function attachSecurityHandlers(win) {
             if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
                 shell.openExternal(url);
             }
-        } catch (_) {}
+        } catch (e) { console.warn('打开外部链接失败:', e.message); }
         return { action: 'deny' };
     });
     win.webContents.on('will-navigate', (e, url) => {
@@ -368,7 +368,7 @@ function bindWindowBoundsEvents(win) {
             const s = loadSettings();
             s.windowBounds = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
             persistSettings();
-        } catch (_) {}
+        } catch (e) { console.warn('持久化窗口位置失败:', e.message); }
     };
     win.on('resize', () => {
         if (windowBoundsDebounceTimer) clearTimeout(windowBoundsDebounceTimer);
@@ -397,7 +397,7 @@ function createWindow() {
         if (typeof mainWindow.setBackgroundMaterial === 'function') {
             mainWindow.setBackgroundMaterial('mica');
         }
-    } catch (_) { /* 忽略 */ }
+    } catch (e) { console.warn('设置窗口背景失败:', e.message); }
 
     attachSecurityHandlers(mainWindow);
     mainWindow.loadFile('index.html');
@@ -417,7 +417,7 @@ function createWindow() {
         if (taskbarIcon && !taskbarIcon.isEmpty() && typeof mainWindow.setOverlayIcon === 'function') {
             mainWindow.setOverlayIcon(taskbarIcon, '便签');
         }
-    } catch (_) { /* 忽略 */ }
+    } catch (e) { console.warn('设置任务栏图标失败:', e.message); }
 
     mainWindow.on('closed', () => { mainWindow = null; });
     mainWindow.on('focus', () => { quitRetryCount = 0; });
@@ -458,7 +458,7 @@ function validateWindowBounds(bounds) {
                 width: w, height: h
             };
         }
-    } catch (_) {}
+    } catch (e) { console.warn('校验窗口位置失败:', e.message); }
     return { x, y, width: w, height: h };
 }
 
@@ -580,7 +580,7 @@ function openPopoutWindowCommon(opts) {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send(closedChannel, { noteId });
             }
-        } catch (_) {}
+        } catch (e) { console.warn('通知主窗口关闭失败:', e.message); }
     });
     map.set(noteId, win);
     return { success: true };
@@ -602,7 +602,7 @@ function togglePopoutPin(noteId, type) {
     // 通知小窗口自身更新按钮 UI
     try {
         win.webContents.send('popout-pin-changed', { pinned: next });
-    } catch (_) {}
+    } catch (e) { console.warn('通知置顶状态失败:', e.message); }
     return { success: true, pinned: next };
 }
 
@@ -868,7 +868,7 @@ pinBtn.addEventListener('click', async () => {
             pinBtn.classList.toggle('active', r.pinned);
             pinBtn.title = r.pinned ? '已置顶（点击取消置顶）' : '未置顶（点击置顶）';
         }
-    } catch (_) {}
+    } catch (e) { console.warn('切换置顶失败:', e.message); }
 });
 
 // 监听主进程推送的待办更新（主窗口改 → 推给小窗口）
@@ -918,7 +918,7 @@ ipcMain.on('popout-note:input', (_event, data) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('popout-note:update', data);
         }
-    } catch (_) {}
+    } catch (e) { console.warn('转发便签输入失败:', e.message); }
 });
 
 // 主窗口内容变化时推送给小窗口
@@ -929,7 +929,7 @@ ipcMain.on('popout-note:push-from-main', (_event, data) => {
         if (win && !win.isDestroyed()) {
             win.webContents.send('popout-note:push', data);
         }
-    } catch (_) {}
+    } catch (e) { console.warn('推送便签更新失败:', e.message); }
 });
 
 /* ==================== 待办事项小窗口 IPC ==================== */
@@ -954,7 +954,7 @@ ipcMain.on('popout-todo:input', (_event, data) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('popout-todo:update', data);
         }
-    } catch (_) {}
+    } catch (e) { console.warn('转发待办输入失败:', e.message); }
 });
 
 // 主窗口待办变化时推送给待办小窗口
@@ -965,7 +965,7 @@ ipcMain.on('popout-todo:push-from-main', (_event, data) => {
         if (win && !win.isDestroyed()) {
             win.webContents.send('popout-todo:push', data);
         }
-    } catch (_) {}
+    } catch (e) { console.warn('推送待办更新失败:', e.message); }
 });
 
 /* ==================== 小窗口置顶切换 IPC ==================== */
@@ -984,20 +984,20 @@ app.on('before-quit', () => {
     const closeAllPopouts = (set) => {
         set.forEach((win) => {
             if (!win || win.isDestroyed()) return;
-            try { win.close(); } catch (_) {}
+            try { win.close(); } catch (e) { console.warn('关闭窗口失败:', e.message); }
             // close 异步，兜底强制销毁（下一轮事件循环）
-            setTimeout(() => { try { if (!win.isDestroyed()) win.destroy(); } catch (_) {} }, 0);
+            setTimeout(() => { try { if (!win.isDestroyed()) win.destroy(); } catch (e) { console.warn('销毁窗口失败:', e.message); } }, 0);
         });
         set.clear();
     };
-    try { closeAllPopouts(popoutWindows); } catch (_) {}
-    try { closeAllPopouts(todoPopoutWindows); } catch (_) {}
+    try { closeAllPopouts(popoutWindows); } catch (e) { console.warn('关闭便签小窗口失败:', e.message); }
+    try { closeAllPopouts(todoPopoutWindows); } catch (e) { console.warn('关闭待办小窗口失败:', e.message); }
     // 刷盘活跃度防抖计数，避免退出时丢失最近 1.5s 内的操作
-    try { flushActivity(); } catch (_) {}
+    try { flushActivity(); } catch (e) { console.warn('保存活动数据失败:', e.message); }
     // 退出前同步刷盘所有未落盘的历史快照，防数据丢失
-    try { flushAllNoteHistorySync(); } catch (_) {}
+    try { flushAllNoteHistorySync(); } catch (e) { console.warn('刷盘历史快照失败:', e.message); }
     // 退出前刷盘日志，防最后一批日志丢失（与 will-quit 互为兜底）
-    try { logger.flushLogFile(); } catch (_) {}
+    try { logger.flushLogFile(); } catch (e) { console.warn('刷盘日志失败:', e.message); }
 });
 
 /* ==================== 托盘创建 ==================== */
@@ -1118,7 +1118,7 @@ function flushActivity() {
         activityPersistTimer = null;
     }
     if (activityCache) {
-        try { saveJSONSync(getActivityPath(), activityCache); } catch (_) {}
+        try { saveJSONSync(getActivityPath(), activityCache); } catch (e) { console.warn('保存活动数据失败:', e.message); }
     }
 }
 
@@ -1317,7 +1317,7 @@ async function getBackupFiles() {
         try {
             const stat = await fs.promises.stat(f.path);
             if (stat.isFile()) result.push(f);
-        } catch (_) { /* 忽略 stat 失败的文件 */ }
+        } catch (e) { console.warn('获取文件信息失败:', e.message); /* 忽略 stat 失败的文件 */ }
     }
     return result;
 }
@@ -1506,7 +1506,7 @@ async function downloadS3Backup(config, key) {
     // 大小上限校验：先看 S3 响应的 ContentLength，超 200MB 直接拒绝
     const contentLength = parseInt(data.ContentLength || '0', 10);
     if (contentLength > MAX_BACKUP_SIZE) {
-        try { data.Body.destroy(); } catch (_) {}
+        try { data.Body.destroy(); } catch (e) { console.warn('关闭S3响应流失败:', e.message); }
         throw new Error(`备份文件过大（${(contentLength/1024/1024).toFixed(1)}MB），超过 200MB 上限`);
     }
     // SDK v3 Body 是 Readable 流，转成 Buffer；同时累计大小防 OOM
@@ -1522,7 +1522,7 @@ async function downloadS3Backup(config, key) {
             chunks.push(buf);
         }
     } catch (e) {
-        try { data.Body.destroy(); } catch (_) {}
+        try { data.Body.destroy(); } catch (err) { console.warn('关闭S3响应流失败:', err.message); }
         throw e;
     }
     return Buffer.concat(chunks);
@@ -1900,9 +1900,9 @@ ipcMain.handle('sync:load-config', async () => {
     // 凭据解密后掩码化回传渲染进程，避免明文凭据进入渲染进程内存（防 DevTools 窥探 / XSS 泄露）
     // 解密失败时（safeStorage 不可用）返回空，前端提示用户重新输入
     let s3AccessKey = '', s3SecretKey = '', webdavPass = '';
-    try { s3AccessKey = await decryptSecret(s3Raw.accessKeyEnc); } catch (_) {}
-    try { s3SecretKey = await decryptSecret(s3Raw.secretKeyEnc); } catch (_) {}
-    try { webdavPass = await decryptSecret(webdavRaw.passEnc); } catch (_) {}
+    try { s3AccessKey = await decryptSecret(s3Raw.accessKeyEnc); } catch (e) { console.warn('解密S3访问密钥失败:', e.message); }
+    try { s3SecretKey = await decryptSecret(s3Raw.secretKeyEnc); } catch (e) { console.warn('解密S3密钥失败:', e.message); }
+    try { webdavPass = await decryptSecret(webdavRaw.passEnc); } catch (e) { console.warn('解密WebDAV密码失败:', e.message); }
     // 旧版明文兼容：加密字段缺失但存在旧版明文字段，掩码化后回传并标记 legacyPlaintext
     const legacyS3 = (!s3AccessKey && !!s3Raw.accessKey) || (!s3SecretKey && !!s3Raw.secretKey);
     const legacyWebdav = !webdavPass && !!webdavRaw.pass;
@@ -2112,7 +2112,7 @@ ipcMain.handle('alarm:show-window', () => {
         if (mainWindow.isMinimized()) mainWindow.restore();
         if (!mainWindow.isVisible()) mainWindow.show();
         mainWindow.focus();
-    } catch (_) { /* 忽略 */ }
+    } catch (e) { console.warn('显示闹钟窗口失败:', e.message); }
 });
 
 // 窗口最大化/还原切换
@@ -2171,7 +2171,7 @@ function loadLockState() {
             delete s.lockCooldownUntil;
             persistSettings();
         }
-    } catch (_) { /* 读取失败保持默认 0，不阻断解锁流程 */ }
+    } catch (e) { console.warn('读取锁定状态失败:', e.message); /* 读取失败保持默认 0，不阻断解锁流程 */ }
 }
 function persistLockState() {
     try {
@@ -2181,7 +2181,7 @@ function persistLockState() {
         if (lockCooldownUntil > Date.now()) s.lockCooldownUntil = lockCooldownUntil;
         else delete s.lockCooldownUntil;
         persistSettings();
-    } catch (_) { /* 持久化失败不影响内存计数 */ }
+    } catch (e) { console.warn('持久化锁定状态失败:', e.message); /* 持久化失败不影响内存计数 */ }
 }
 
 /**
@@ -2418,7 +2418,7 @@ const HISTORY_MIN_INTERVAL_MS = 60 * 1000;  // 同条便签 60s 内只生成一�
 function ensureHistoryDir() {
     try {
         if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR, { recursive: true });
-    } catch (_) {}
+    } catch (e) { console.warn('创建历史目录失败:', e.message); }
 }
 
 function getHistoryFilePath(noteId) {
@@ -2596,7 +2596,7 @@ ipcMain.handle('get-pin-state', () => isPinned);
 ipcMain.handle('toggle-fixed', () => {
     if (!mainWindow) return false;
     isFixed = !isFixed;
-    try { mainWindow.setMovable(!isFixed); } catch(_) {}
+    try { mainWindow.setMovable(!isFixed); } catch (e) { console.warn('设置窗口可移动失败:', e.message); }
     mainWindow.webContents.send('fixed-changed', isFixed);
     return isFixed;
 });
@@ -2895,7 +2895,7 @@ ipcMain.handle('ai:chat', async (event, payload) => {
         // 使用局部变量 ac 固定引用当前请求的 controller，避免模块级 chatAbortController 被并发覆盖后误判
         const ac = new AbortController();
         chatAbortController = ac;
-        const timeoutId = setTimeout(() => { try { ac.abort(); } catch (_) {} }, 180000);
+        const timeoutId = setTimeout(() => { try { ac.abort(); } catch (e) { console.warn('中止请求失败:', e.message); } }, 180000);
         let aborted = false;  // 标记是否被用户主动中断
 
         // 解析 SSE 流
@@ -2984,7 +2984,7 @@ ipcMain.handle('ai:chat', async (event, payload) => {
 // 中断当前 AI 对话请求（用户点击暂停按钮时调用）
 ipcMain.handle('chat:abort', () => {
     if (chatAbortController) {
-        try { chatAbortController.abort(); } catch (_) {}
+        try { chatAbortController.abort(); } catch (e) { console.warn('中止对话请求失败:', e.message); }
         chatAbortController = null;
         return true;
     }
@@ -3065,9 +3065,9 @@ ipcMain.handle('ai:load-image-config', async () => {
     const provider = cfg.imageProvider || 'openai';
     // 掩码化回传，避免明文 API Key 进入渲染进程
     let dashscopeKey = '', imageKey = '', videoKey = '';
-    try { dashscopeKey = maskCred(await decryptSecret(cfg.dashscopeEncryptedKey, 'API Key')); } catch (_) {}
-    try { imageKey = maskCred(await decryptSecret(cfg.imageEncryptedKey, 'API Key')); } catch (_) {}
-    try { videoKey = maskCred(await decryptSecret(cfg.dashscopeVideoEncryptedKey, 'API Key')); } catch (_) {}
+    try { dashscopeKey = maskCred(await decryptSecret(cfg.dashscopeEncryptedKey, 'API Key')); } catch (e) { console.warn('解密DashScope密钥失败:', e.message); }
+    try { imageKey = maskCred(await decryptSecret(cfg.imageEncryptedKey, 'API Key')); } catch (e) { console.warn('解密图片密钥失败:', e.message); }
+    try { videoKey = maskCred(await decryptSecret(cfg.dashscopeVideoEncryptedKey, 'API Key')); } catch (e) { console.warn('解密视频密钥失败:', e.message); }
     // 保存路径统一使用 imageSavePath（图片/视频共用）
     // fallback 到 dashscopeSavePath 仅为兼容老版本配置数据
     const unifiedSavePath = cfg.imageSavePath || cfg.dashscopeSavePath || '';
@@ -3272,7 +3272,7 @@ async function saveVideoToDisk(videoUrl, cfg) {
         // 120 秒超时与原实现保持一致（视频文件可能较大）
         await streamDownloadToFile(videoUrl, filePath, { timeout: 120000 });
     } catch (err) {
-        try { await fs.promises.unlink(filePath); } catch (_) {}
+        try { await fs.promises.unlink(filePath); } catch (e) { console.warn('删除临时文件失败:', e.message); }
         throw err;
     }
     console.log('视频已保存:', path.basename(filePath));
@@ -3459,7 +3459,7 @@ async function dashscopeGenerateVideo(baseUrl, apiKey, model, prompt, size, imag
 // 中断当前视频生成轮询（用户点击取消按钮或退出软件时调用）
 ipcMain.handle('ai:abort-video', () => {
     if (videoAbortController) {
-        try { videoAbortController.abort(); } catch (_) {}
+        try { videoAbortController.abort(); } catch (e) { console.warn('中止视频请求失败:', e.message); }
         videoAbortController = null;
         return true;
     }
@@ -3477,7 +3477,7 @@ function buildOpenAiImageUrl(baseUrl, imagePath) {
         if (/\/v\d+$/.test(u.pathname)) {
             return trimmed + imagePath;  // imagePath 形如 '/images/generations'
         }
-    } catch (e) { /* URL 解析失败走下面的字符串拼接兜底 */ }
+    } catch (e) { console.warn('解析URL失败:', e.message); /* URL 解析失败走下面的字符串拼接兜底 */ }
     // 路径不含版本号 → 补 /v1（向后兼容老配置）
     return trimmed + '/v1' + imagePath;
 }
@@ -3675,7 +3675,7 @@ ipcMain.handle('music:pick-files', tryWrap(async () => {
         try {
             const st = await fs.promises.stat(p);
             if (st.isFile()) files.push({ filePath: p, size: st.size });
-        } catch (_) { /* 跳过无法访问的文件 */ }
+        } catch (e) { console.warn('获取文件信息失败:', e.message); /* 跳过无法访问的文件 */ }
     }
     return { success: true, files };
 }));
@@ -3714,7 +3714,7 @@ ipcMain.handle('music:scan-folder', tryWrap(async (_event, { folderPath, recursi
                     try {
                         const st = await fs.promises.stat(fullPath);
                         if (st.isFile()) files.push({ filePath: fullPath, size: st.size });
-                    } catch (_) { /* 跳过 */ }
+                    } catch (e) { console.warn('获取文件信息失败:', e.message); }
                 }
             } else if (entry.isDirectory() && doRecursive && depth < 10) {
                 await walk(fullPath, depth + 1);
@@ -4497,7 +4497,7 @@ ipcMain.handle('logs:refresh', (_e, filter) => {
 ipcMain.handle('logs:meta', tryWrap(async () => {
     const stats = logger.getLogStats();
     let currentFile = '';
-    try { currentFile = logger.getWritableLogPath(); } catch (_) {}
+    try { currentFile = logger.getWritableLogPath(); } catch (e) { console.warn('获取日志路径失败:', e.message); }
     return {
         success: true,
         total: stats.total,
@@ -4557,7 +4557,7 @@ if (!gotSingleInstanceLock) {
 
     app.whenReady().then(async () => {
     // 初始化日志文件（必须在 userData 目录就绪后调用）
-    try { logger.initLogFile(); } catch (_) {}
+    try { logger.initLogFile(); } catch (e) { console.warn('初始化日志文件失败:', e.message); }
 
     // 静默清理过期日志文件（7天前），异步不阻塞启动
     // 失败仅 console.error 吞掉，不影响应用启动
@@ -4679,25 +4679,25 @@ if (!gotSingleInstanceLock) {
         // 修复：原 async 回调无 .catch()，启动阶段异常成为 unhandled rejection，
         // 应用启动失败时无任何错误提示
         console.error('应用启动失败:', e);
-        try { if (app) app.exit(1); } catch (_) {}
+        try { if (app) app.exit(1); } catch (e) { console.warn('退出应用失败:', e.message); }
     });
 }
 
 // 退出时清理资源
 app.on('will-quit', () => {
     // 退出前最终刷盘日志（与 before-quit 互为兜底，防最后一批日志丢失）
-    try { logger.flushLogFile(); } catch (_) {}
+    try { logger.flushLogFile(); } catch (e) { console.warn('刷盘日志失败:', e.message); }
     // 退出时主动中断视频轮询，避免后台轮询继续浪费 API 配额
     try {
         if (videoAbortController) {
             videoAbortController.abort();
             videoAbortController = null;
         }
-    } catch (_) {}
+    } catch (e) { console.warn('中止视频请求失败:', e.message); }
     // 清理自动同步定时器，避免退出过程中触发无意义的同步
     try {
         if (autoSyncTimer) { clearInterval(autoSyncTimer); autoSyncTimer = null; }
-    } catch (_) {}
+    } catch (e) { console.warn('清理同步定时器失败:', e.message); }
 });
 
 app.on('window-all-closed', () => {
@@ -4716,7 +4716,7 @@ app.on('before-quit', (e) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('app-saving-before-quit');
         }
-    } catch (_) {}
+    } catch (e) { console.warn('通知主窗口退出失败:', e.message); }
 
     if (isPendingSave() && quitRetryCount < MAX_QUIT_RETRY) {
         e.preventDefault();

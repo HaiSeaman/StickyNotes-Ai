@@ -366,20 +366,20 @@ window.addEventListener('beforeunload', () => {
         pushTimer = null;
         const _note = notes.find(n => n.id === currentNoteId);
         if (_note && _note.id) {
-            try { window.api.pushNoteToPopout(String(_note.id), _note.content || ''); } catch (_) {}
+            try { window.api.pushNoteToPopout(String(_note.id), _note.content || ''); } catch (e) { console.warn('推送便签到小窗失败:', e.message); }
         }
     }
     // 2. 保存防抖（contentDirty 标记有未落盘数据，直接 invoke 同步发出）
     if (saveTimer && contentDirty) {
         clearTimeout(saveTimer);
         saveTimer = null;
-        try { window.api.saveNotes(notes); } catch (_) {}
+        try { window.api.saveNotes(notes); } catch (e) { console.error('退出时保存便签失败:', e.message); }
     }
     // 待办小窗口独立计时器也需在退出时 flush，防 todo 数据丢失
     if (todoSaveTimer) {
         clearTimeout(todoSaveTimer);
         todoSaveTimer = null;
-        try { window.api.saveTodos(todos); } catch (_) {}
+        try { window.api.saveTodos(todos); } catch (e) { console.error('退出时保存待办失败:', e.message); }
     }
     // 4. 清理全局定时器，避免窗口关闭后仍触发回调报错
     if (clockTimerId) { clearInterval(clockTimerId); clockTimerId = null; }
@@ -392,12 +392,12 @@ if (window.api && window.api.onAppSavingBeforeQuit) {
         if (saveTimer && contentDirty) {
             clearTimeout(saveTimer);
             saveTimer = null;
-            try { window.api.saveNotes(notes); } catch (_) {}
+            try { window.api.saveNotes(notes); } catch (e) { console.error('退出前保存便签失败:', e.message); }
         }
         if (todoSaveTimer) {
             clearTimeout(todoSaveTimer);
             todoSaveTimer = null;
-            try { window.api.saveTodos(todos); } catch (_) {}
+            try { window.api.saveTodos(todos); } catch (e) { console.error('退出前保存待办失败:', e.message); }
         }
     });
 }
@@ -675,7 +675,7 @@ async function createNote() {
     noteInput.focus();
     // 埋点：新建便签算一次编辑
     if (window.api && window.api.incrementActivity) {
-        try { window.api.incrementActivity('note'); } catch (_) {}
+        try { window.api.incrementActivity('note'); } catch (e) { console.warn('便签埋点上报失败:', e.message); }
     }
 }
 
@@ -803,7 +803,7 @@ async function toggleTodo(id) {
     pushTodosToPopoutIfOpen();
     // 埋点：勾选完成（非取消）时给今日待办计数 +1
     if (t.done && window.api && window.api.incrementActivity) {
-        try { window.api.incrementActivity('todo'); } catch (_) {}
+        try { window.api.incrementActivity('todo'); } catch (e) { console.warn('待办埋点上报失败:', e.message); }
     }
 }
 
@@ -857,7 +857,7 @@ async function saveContentAndFlush() {
     // 埋点：手动保存（Ctrl+Enter 或切换便签触发）给今日便签编辑 +1
     // 注意：handleContentInput 的防抖自动保存不走此路径，避免连续输入导致计数爆炸
     if (window.api && window.api.incrementActivity) {
-        try { window.api.incrementActivity('note'); } catch (_) {}
+        try { window.api.incrementActivity('note'); } catch (e) { console.warn('便签埋点上报失败:', e.message); }
     }
 }
 
@@ -872,7 +872,7 @@ function handleContentInput() {
         const ncontent = note.content || '';
         if (pushTimer) clearTimeout(pushTimer);
         pushTimer = setTimeout(() => {
-            try { window.api.pushNoteToPopout(nid, ncontent); } catch (_) {}
+            try { window.api.pushNoteToPopout(nid, ncontent); } catch (e) { console.warn('推送便签到小窗失败:', e.message); }
             pushTimer = null;
         }, 200);
     }
@@ -883,7 +883,7 @@ function handleContentInput() {
         renderNoteList();
         // 后台悄悄生成历史快照（后悔药）：主进程会做时间间隔/内容变化校验
         if (note && note.id) {
-            try { await window.api.saveNoteSnapshot(note.id, note.content || ''); } catch (_) {}
+            try { await window.api.saveNoteSnapshot(note.id, note.content || ''); } catch (e) { console.error('保存便签历史快照失败:', e.message); }
         }
     }, SAVE_DELAY);
 }
@@ -982,7 +982,7 @@ function renderHistoryList(note, history) {
                     const fresh = await window.api.listNoteHistory(note.id) || [];
                     renderHistoryList(note, fresh);
                 }
-            } catch (_) {}
+            } catch (e) { console.warn('切换历史记录锁失败:', e.message); }
         });
         mainCol.appendChild(lockBtn);
         li.appendChild(mainCol);
@@ -1445,7 +1445,7 @@ function pushTodosToPopoutIfOpen() {
     if (typeof window.api.pushTodosToPopout !== 'function') return;
     try {
         window.api.pushTodosToPopout(String(note.id), (note.todos || []).slice());
-    } catch (_) {}
+    } catch (e) { console.warn('推送待办到弹窗失败:', e.message); }
 }
 
 closeBtn.addEventListener('click', async () => {
@@ -1757,7 +1757,7 @@ imgProvider.addEventListener('change', async () => {
                     videoBaseUrl: videoBaseUrl.value.trim(),
                     videoApiKey: videoApiKey.value.trim(),
                 });
-            } catch (_) {}
+            } catch (e) { console.warn('保存图像配置失败:', e.message); }
         }
     }
     // 加载新 provider 的配置填充到表单
@@ -2025,7 +2025,7 @@ function buildStatsDom(stats, contentForCopy) {
                 if (textEl) textEl.textContent = origText || '复制';
                 copyBtn.classList.remove('copied');
             }, 1200);
-        } catch (_) {}
+        } catch (e) { console.warn('复制聊天内容失败:', e.message); }
     });
     el.appendChild(copyBtn);
     return el;
@@ -2190,7 +2190,7 @@ function cleanupChatImages(chat) {
         if (m.role === 'user' && Array.isArray(m.images)) {
             m.images.forEach(img => {
                 if (img && img.path) {
-                    try { window.api.deleteChatImage(img.path); } catch (_) {}
+                    try { window.api.deleteChatImage(img.path); } catch (e) { console.warn('删除聊天图片失败:', e.message); }
                 }
             });
         }
@@ -2565,7 +2565,7 @@ chatDelBtn.addEventListener('click', () => {
 chatSendBtn.addEventListener('click', () => {
     // 暂停模式：点击中断当前 AI 回答
     if (chatSending) {
-        try { window.api.abortChat(); } catch (_) {}
+        try { window.api.abortChat(); } catch (e) { console.warn('中断 AI 回答失败:', e.message); }
         return;
     }
     sendChat();
@@ -2634,7 +2634,7 @@ chatFileInput.addEventListener('change', async () => {
 async function initChatModule() {
     loadChats();
     // 加载归档/垃圾桶数据（await 确保打开文件夹时数据已就绪，防空列表；catch 防错误传播）
-    try { await loadArchivedAndTrashedChats(); } catch (_) {}
+    try { await loadArchivedAndTrashedChats(); } catch (e) { console.error('加载归档/垃圾桶聊天失败:', e.message); }
     if (aiChats.length === 0) {
         newChat();
     } else {
@@ -2702,13 +2702,13 @@ createSize.addEventListener('input', () => {
     if (sizeSaveTimer) clearTimeout(sizeSaveTimer);
     sizeSaveTimer = setTimeout(async () => {
         const sz = createSize.value.trim();
-        try { await window.api.saveCustomSize(sz); } catch (_) {}
+        try { await window.api.saveCustomSize(sz); } catch (e) { console.error('保存自定义尺寸失败:', e.message); }
     }, 600);
 });
 
 createSize.addEventListener('change', () => {
     const sz = createSize.value.trim();
-    try { window.api.saveCustomSize(sz); } catch (_) {}
+    try { window.api.saveCustomSize(sz); } catch (e) { console.error('保存自定义尺寸失败:', e.message); }
 });
 
 /* ==================== 创作：图片/视频模式切换 ==================== */
@@ -2916,7 +2916,7 @@ alarmVolumeSlider.addEventListener('change', async function() {
             const soundFn = ALARM_SOUNDS[currentAlarmSound] || ALARM_SOUNDS.default;
             soundFn(ctx);
         }
-    } catch (_) {}
+    } catch (e) { console.warn('试听闹钟铃声失败:', e.message); }
 });
 
 /* ==================== 开机启动弹出面板（仿透明度面板风格） ====================
@@ -2934,7 +2934,7 @@ settingsStartupBtn.addEventListener('click', async (e) => {
         const sysOpen = await window.api.getLaunchAtLogin();
         startupToggleState.open = !!sysOpen;
         updateStartupToggleUI();
-    } catch (_) {}
+    } catch (e) { console.warn('读取开机启动状态失败:', e.message); }
     startupPanel.classList.add('open');
     positionPanel(settingsBtn, startupPanel);
 });
@@ -4173,7 +4173,7 @@ function buildChatMarkdown(chat) {
             try {
                 lines.push('*' + new Date(msg.ts).toLocaleString('zh-CN') + '*');
                 lines.push('');
-            } catch (_) {}
+            } catch (e) { console.warn('格式化消息时间失败:', e.message); }
         }
         // 思考过程
         if (msg.role === 'assistant' && msg.reasoning) {
@@ -4450,7 +4450,7 @@ if (resizeHandle) {
                 var restoreTarget = lastFocusedElement;
                 lastFocusedElement = null;
                 setTimeout(function() {
-                    try { restoreTarget.focus(); } catch (_) {}
+                    try { restoreTarget.focus(); } catch (e) { console.warn('恢复焦点失败:', e.message); }
                 }, 50);
             }
         } else {
@@ -4552,7 +4552,7 @@ function moveContentPanelTo(slot) {
         contentPanel.style.display = '';
         // 移动 DOM 节点后 textarea 的 disabled 状态可能被某些浏览器重置
         // 强制重新触发一次 renderEditor 确保输入框可用
-        try { renderEditor(); } catch (_) {}
+        try { renderEditor(); } catch (e) { console.warn('重新渲染编辑器失败:', e.message); }
     }
 }
 
@@ -4831,7 +4831,7 @@ function startAlarmSound(soundType) {
             const r = ctx.resume();
             if (r && typeof r.then === 'function') r.catch(() => {});
         }
-    } catch (_) {}
+    } catch (e) { console.warn('恢复音频上下文失败:', e.message); }
     alarmRinging = true;
     currentAlarmSound = soundType || 'default';
     const soundFn = ALARM_SOUNDS[currentAlarmSound] || ALARM_SOUNDS.default;
@@ -4843,7 +4843,7 @@ function startAlarmSound(soundType) {
                 const r = ctx.resume();
                 if (r && typeof r.then === 'function') r.catch(() => {});
             }
-        } catch (_) {}
+        } catch (e) { console.warn('恢复音频上下文失败:', e.message); }
         const interval = soundFn(ctx);
         alarmOscTimer = setTimeout(tick, interval);
     };
@@ -4960,11 +4960,11 @@ function onTimerFinished() {
     // 尝试系统通知
     try {
         new Notification('倒计时结束', { body: label || '你的倒计时已完成！', silent: true });
-    } catch (_) {}
+    } catch (e) { console.warn('发送倒计时通知失败:', e.message); }
     alarmStopBtn.disabled = false;
     // 窗口隐藏/最小化时唤起主窗口，确保用户能听到倒计时结束铃声
     if (document.hidden && window.api && typeof window.api.showWindowForAlarm === 'function') {
-        try { window.api.showWindowForAlarm(); } catch (_) {}
+        try { window.api.showWindowForAlarm(); } catch (e) { console.warn('唤起主窗口失败:', e.message); }
     }
 }
 
@@ -4988,7 +4988,7 @@ function loadAlarms() {
 }
 
 function saveAlarms() {
-    try { localStorage.setItem('alarms', JSON.stringify(alarms)); } catch (_) {}
+    try { localStorage.setItem('alarms', JSON.stringify(alarms)); } catch (e) { console.error('保存闹钟失败:', e.message); }
 }
 
 function addAlarm() {
@@ -5160,10 +5160,10 @@ function checkAlarms() {
         try {
             const label = ringingAlarm && ringingAlarm.label ? ringingAlarm.label : '';
             new Notification('闹钟响铃', { body: `${pad2(h)}:${pad2(m)}:${pad2(s)}${label ? ' · ' + label : ''}`, silent: true });
-        } catch (_) {}
+        } catch (e) { console.warn('发送闹钟通知失败:', e.message); }
         // 窗口处于隐藏/最小化（托盘）时，响铃同时把主窗口唤起，确保用户能听到并看到
         if (windowHidden && window.api && typeof window.api.showWindowForAlarm === 'function') {
-            try { window.api.showWindowForAlarm(); } catch (_) {}
+            try { window.api.showWindowForAlarm(); } catch (e) { console.warn('唤起主窗口失败:', e.message); }
         }
     }
     // 每秒刷新闹钟列表中的倒计时显示（仅当秒变化时）
@@ -5242,7 +5242,7 @@ async function initAppSettings() {
     try {
         const savedSize = await window.api.loadCustomSize();
         if (savedSize) createSize.value = savedSize;
-    } catch (_) {}
+    } catch (e) { console.warn('读取自定义尺寸失败:', e.message); }
 }
 
 async function initWindowProps() {
@@ -5250,12 +5250,12 @@ async function initWindowProps() {
         const pinned = await window.api.getPinState();
         pinBtn.classList.toggle('active', pinned);
         pinBtn.title = pinned ? '取消置顶' : '窗口置顶';
-    } catch (_) {}
+    } catch (e) { console.warn('读取置顶状态失败:', e.message); }
     try {
         const f = await window.api.getFixedState();
         fixedBtn.classList.toggle('active', f);
         fixedBtn.title = f ? '已固定（点击解除）' : '固定窗口位置';
-    } catch(_) {}
+    } catch (e) { console.warn('读取固定状态失败:', e.message); }
     window.api.onFixedChanged(f => {
         fixedBtn.classList.toggle('active', f);
         fixedBtn.title = f ? '已固定（点击解除）' : '固定窗口位置';
