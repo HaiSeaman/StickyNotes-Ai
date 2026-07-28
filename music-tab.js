@@ -323,10 +323,7 @@
     }
 
     function clearPlaylist() {
-        if (howl) {
-            howl.unload();
-            howl = null;
-        }
+        destroyCurrentHowl();
         playlist = [];
         currentIndex = -1;
         isPlaying = false;
@@ -337,15 +334,28 @@
         savePlaylistDebounced();
     }
 
+    function destroyCurrentHowl() {
+        if (howl) {
+            try {
+                howl.off(); // 移除所有事件监听回调
+                howl.stop();
+                howl.unload(); // 释放 WebAudio/Audio 内存节点
+            } catch (e) {
+                console.warn('[Music] 销毁 Howler 实例异常:', e);
+            }
+            howl = null;
+        }
+        if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+        }
+    }
+
     // ============ 播放控制 ============
     function playTrack(index, manual) {
         if (index < 0 || index >= playlist.length) return;
-        // 卸载旧的 Howl 实例（释放音频资源）+ 取消 rAF 循环
-        if (howl) {
-            howl.unload();
-            howl = null;
-        }
-        if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+        // 彻底卸载旧的 Howl 实例（释放音频资源）+ 取消 rAF 循环
+        destroyCurrentHowl();
         currentIndex = index;
         const track = playlist[index];
         if (!track) return;

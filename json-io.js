@@ -34,16 +34,39 @@ function loadJSON(filePath, fallback) {
 }
 
 /**
- * 异步保存 JSON 文件（按文件排队 + 原子写入 + Windows EPERM 重试 + 跨卷降级）。
+ * 异步保存 JSON 文件（支持写合并，高频写入时自动折叠只落盘最新数据 + 原子写入 + Windows EPERM 重试）。
  */
 async function saveJSON(filePath, data) {
-    const previousPromise = fileLocks.get(filePath) || Promise.resolve();
-    const currentTask = (async () => {
-        try { await previousPromise; } catch (_) {}
-        return doSaveJSON(filePath, data);
+    let task = fileLocks.get(filePath);
+    if (!task) {
+        task = {
+            isWriting: false,
+            pendingData: null,
+            currentPromise: Promise.resolve()
+        };
+        fileLocks.set(filePath, task);
+    }
+
+    // 记录最新待写入数据
+    task.pendingData = data;
+
+    if (task.isWriting) {
+        return task.currentPromise;
+    }
+
+    task.isWriting = true;
+    task.currentPromise = (async () => {
+        let lastResult = false;
+        while (task.pendingData !== null) {
+            const dataToSave = task.pendingData;
+            task.pendingData = null; // 消费待写入数据
+            lastResult = await doSaveJSON(filePath, dataToSave);
+        }
+        task.isWriting = false;
+        return lastResult;
     })();
-    fileLocks.set(filePath, currentTask.catch(() => {}));
-    return currentTask;
+
+    return task.currentPromise;
 }
 
 async function doSaveJSON(filePath, data) {

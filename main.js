@@ -4,7 +4,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const https = require('https');
 const http = require('http');
-const { exec } = require('child_process');
 const AdmZip = require('adm-zip');
 const { S3Client, PutObjectCommand, HeadBucketCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 // music-metadata-browser：解析音频 ID3/Vorbis 标签与封面图（V7.4 音乐模块）
@@ -16,7 +15,7 @@ const { parseNodeStream } = require('music-metadata-browser');
 const logger = require('./logger');
 
 const { registerAiHandlers } = require('./services/aiService');
-const { buildWebdavRequestContext, webdavRequest, parseWebdavPropfindXml } = require('./services/syncService');
+const { webdavRequest } = require('./services/syncService');
 const { serveLocalFile, cleanTtsCache, saveAudioToTtsCache } = require('./main/protocol');
 const { getOverlayLoggerScript, getPopoutCommonCss, buildPopoutHtml } = require('./main/popoutTemplate');
 
@@ -50,6 +49,11 @@ const {
 // JSON 文件原子读写（loadJSON / saveJSON / saveJSONSync）：损坏自动备份 + Windows EPERM 重试
 const { loadJSON, saveJSON, saveJSONSync } = require('./json-io');
 const { trimTrailingSlash } = require('./shared-utils');
+
+// 路由解耦模块导入
+const { registerAiIpc } = require('./main/ipc/aiIpc');
+const { registerNotesIpc } = require('./main/ipc/notesIpc');
+const { registerSystemIpc } = require('./main/ipc/systemIpc');
 
 /* ==================== 文件路径 ====================
  * 所有 getXxxPath / getXxxDir 已迁移至 paths.js，通过解构导入。
@@ -108,16 +112,9 @@ protocol.registerSchemesAsPrivileged([
         scheme: 'chatimg',
         privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false }
     },
-    /* ttsfile 协议：渲染进程 <audio src="ttsfile://tts_cache/xxx.mp3"> 加载本地合成音频。
-     * 与 chatimg 同构：主进程读盘返回，渲染进程零 base64 内存占用。
-     * 必须在 app ready 前注册 scheme，否则不会被当作标准协议处理（无法用于 <audio>）。 */
-    {
-        scheme: 'ttsfile',
-        privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false }
-    },
     /* musicfile 协议：渲染进程 <audio src="musicfile://audio/<encoded-path>"> 加载本地音乐文件，
      * <img src="musicfile://cover/<encoded-path>"> 加载专辑封面。
-     * 与 ttsfile 同构：主进程读盘返回，含 realpath 二次校验防 symlink 逃逸。
+     * 含 realpath 二次校验防 symlink 逃逸。
      * 必须在 app ready 前注册 scheme，否则不会被当作标准协议处理。 */
     {
         scheme: 'musicfile',
@@ -2974,123 +2971,11 @@ ipcMain.handle('chat:abort', () => {
 });
 
 /* ==================== AI 翻译（文本） ====================
- * 复用 ai:chat 的多模态能力，但使用固定的系统提示词，非流式输出。
- * 文本翻译：ai:translate(text, targetLang)
- * ============================================================ */
-
-// 目标语言代码 → 语言名称映射（用于动态构建系统提示词）
-const TRANSLATE_LANG_MAP = {
-    zh: '简体中文',
-    en: '英文（English）',
-    ja: '日文（日本語）',
-    fr: '法文（Français）',
-    de: '德文（Deutsch）',
-    pt: '葡萄牙文（Português）',
-    ar: '阿拉伯文（العربية）',
-    es: '西班牙文（Español）',
-};
-
-/**
- * 根据目标语言代码构建翻译系统提示词
- * @param {string} langCode - 语言代码（zh/en/ja/fr/de/pt/ar/es），默认 zh
- * @returns {string} 系统提示词
- */
-function buildTranslatePrompt(langCode, hasImages) {
-    const langName = TRANSLATE_LANG_MAP[langCode] || TRANSLATE_LANG_MAP.zh;
-    let prompt = '你是一个资深的 IT 翻译专家，请把用户输入的内容翻译为通俗易懂的' + langName +
-        '，保持代码和专有名词的原意。如果内容已经是目标语言，请直接润色输出。只输出翻译结果，不要解释。';
-    if (hasImages) {
-        prompt += ' 用户可能传入图片，请识别图片中的文字（OCR）并翻译为' + langName +
-            '。如果图片中无可识别文字，请简要描述图片内容并翻译。';
-    }
-    return prompt;
-}
-
-// 构建翻译 user 消息 content：有图时返回 OpenAI Vision parts 数组，无图时返回纯字符串
-function buildTranslateUserContent(text, images) {
-    if (!Array.isArray(images) || images.length === 0) {
-        return String(text);
-    }
-    const parts = [];
-    if (text && String(text).trim()) {
-        parts.push({ type: 'text', text: String(text) });
-    }
-    images.forEach(img => {
-        if (!img) return;
-        // 复用聊天图片读取逻辑：前端只传 path，主进程读回 base64 dataUrl
-        let url = img.dataUrl;
-        if (!url && img.path) {
-            url = readChatImageAsDataUrl(img.path);
-        }
-        if (url) parts.push({ type: 'image_url', image_url: { url: url } });
-    });
-    // 若 parts 为空（图片读取失败且无文本），兜底返回空文本
-    return parts.length > 0 ? parts : [{ type: 'text', text: '' }];
-}
-
-// 文本翻译：非流式，直接返回译文。支持 targetLang 参数选择目标语言。
-// 支持单图 OCR 翻译：第 3 个参数 images 为数组，元素 {path} 或 {dataUrl}
-ipcMain.handle('ai:translate', async (_event, text, targetLang, images) => {
-    assertPayloadSize(text, MAX_IPC_PAYLOAD_SIZE, 'ai:translate 入参');
-    const s = loadSettings();
-    const cfg = s.aiConfig || {};
-    if (!cfg.baseUrl || !cfg.model) throw new Error('AI 配置不完整，请先在 AI 设置中配置');
-    validateAiBaseUrl(cfg.baseUrl, 'AI API 地址');
-    return await withDecryptedKey(() => decryptSecret(cfg.encryptedKey, 'API Key'), async (apiKey) => {
-        if (!apiKey) throw new Error('API Key 未配置');
-        const hasImages = Array.isArray(images) && images.length > 0;
-        if ((!text || !String(text).trim()) && !hasImages) throw new Error('请输入要翻译的内容');
-        // 根据目标语言动态构建提示词（有图时附加 OCR 指令）
-        const systemPrompt = buildTranslatePrompt(targetLang || 'zh', hasImages);
-        const url = trimTrailingSlash(cfg.baseUrl) + '/chat/completions';
-        // 有图时 user content 为 parts 数组（OpenAI Vision 格式），无图时为纯字符串
-        const userContent = buildTranslateUserContent(text || '', images);
-        const messages = [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userContent }
-        ];
-        const resp = await safeFetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-            body: JSON.stringify({
-                model: cfg.model,
-                messages: messages,
-                temperature: Math.min(cfg.temperature ?? 0.3, 0.5),  // 翻译用低温度保证稳定
-            }),
-            signal: AbortSignal.timeout(60000),
-        });
-        if (!resp.ok) throw new Error(await extractHttpError(resp));
-        const data = await resp.json();
-        return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-    });
-});
-
 // 窗口透明度
-ipcMain.handle('window:set-opacity', (_event, val) => {
-    if (!mainWindow) return;
-    // 数值校验：防 NaN/字符串导致 setOpacity 行为未定义
-    if (typeof val !== 'number' || !Number.isFinite(val)) return;
-    const opacity = Math.max(0.2, Math.min(1, val));
-    mainWindow.setOpacity(opacity);
-    const s = loadSettings();
-    s.opacity = opacity;
-    persistSettings();
-    return opacity;
-});
-ipcMain.handle('window:get-opacity', () => {
-    const s = loadSettings();
-    return s.opacity ?? 1;
-});
-
-// 选择文件夹
-ipcMain.handle('select-folder', async () => {
-    if (!mainWindow) return null;
-    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-    if (!result.canceled && result.filePaths.length > 0) {
-        return result.filePaths[0];
-    }
-    return null;
-});
+// 注册解耦路由
+registerAiIpc({ loadSettings, persistSettings, isMaskedCred, encryptSecret, validateAiBaseUrl });
+registerNotesIpc({ getNotesPath, loadJSON, saveJSON, MAX_IPC_PAYLOAD_SIZE });
+registerSystemIpc({ getMainWindow: () => mainWindow, loadSettings, persistSettings });
 
 // 保存自定义图片尺寸（自动保存，不加入推荐列表）
 ipcMain.handle('ai:save-custom-size', (_event, size) => {
@@ -3204,57 +3089,6 @@ ipcMain.handle('ai:load-image-config', async () => {
  * 三级 Key fallback：ttsEncryptedKey → dashscopeEncryptedKey → encryptedKey(聊天)
  *   老配置（已有图片或聊天百炼 Key）零改动即可使用 TTS，无需重复填写。
  * ================================================================== */
-
-// 保存 TTS 配置（API Key 加密落盘；掩码占位时保留旧密钥）
-ipcMain.handle('tts:save-config', async (_event, config) => {
-    const s = loadSettings();
-    if (!s.aiConfig) s.aiConfig = {};
-    const cfg = s.aiConfig;
-    // 仅当字段被显式传入（非 undefined）时才写入，避免部分保存清空其他字段
-    // SSRF 防护：校验 TTS API 地址协议
-    if (config.baseUrl !== undefined) {
-        validateAiBaseUrl(config.baseUrl, 'TTS API 地址');
-        cfg.ttsBaseUrl = config.baseUrl;
-    }
-    if (config.apiKey !== undefined) {
-        // 掩码占位时保留已保存的加密值，避免掩码字符串被当真实密钥加密落盘
-        cfg.ttsEncryptedKey = isMaskedCred(config.apiKey) ? cfg.ttsEncryptedKey : await encryptSecret(config.apiKey, 'API Key');
-    }
-    if (config.model !== undefined) cfg.ttsModel = config.model || 'cosyvoice-v1';
-    if (config.voice !== undefined) cfg.ttsVoice = config.voice || '';
-    if (config.format !== undefined) cfg.ttsFormat = config.format || 'mp3';
-    if (config.sampleRate !== undefined) cfg.ttsSampleRate = config.sampleRate || 22050;
-    // 自定义音色列表：保留字段以兼容旧配置数据（克隆功能已下线，不再写入新数据）
-    if (config.customVoices !== undefined) cfg.ttsCustomVoices = config.customVoices || [];
-    return persistSettings();
-});
-
-// 加载 TTS 配置（apiKey 掩码化回传，避免明文进入渲染进程）
-// 三级 Key fallback：优先解密 tts 专用 Key，失败/为空则 fallback 到图片百炼 Key，再 fallback 到聊天 Key
-ipcMain.handle('tts:load-config', async () => {
-    const s = loadSettings();
-    const cfg = s.aiConfig || {};
-    let ttsKey = '';
-    try {
-        // 三级 fallback 解密：tts 专用 → 图片共用百炼 → 聊天通用
-        let raw = await decryptSecret(cfg.ttsEncryptedKey, 'API Key');
-        if (!raw) raw = await decryptSecret(cfg.dashscopeEncryptedKey, 'API Key');
-        if (!raw) raw = await decryptSecret(cfg.encryptedKey, 'API Key');
-        ttsKey = maskCred(raw);
-    } catch (e) {
-        // 解密失败（safeStorage 不可用等）：返回空，前端提示用户重新输入
-        console.error('加载 TTS API Key 失败:', e.message);
-    }
-    return {
-        baseUrl: cfg.ttsBaseUrl || 'https://dashscope.aliyuncs.com',
-        apiKey: ttsKey,
-        model: cfg.ttsModel || 'cosyvoice-v1',
-        voice: cfg.ttsVoice || '',
-        format: cfg.ttsFormat || 'mp3',
-        sampleRate: cfg.ttsSampleRate || 22050,
-        customVoices: cfg.ttsCustomVoices || [],
-    };
-});
 
 // 自动保存图片到磁盘
 function saveImageToDisk(dataUrl, cfg) {
@@ -3965,124 +3799,6 @@ ipcMain.handle('ai:generate-video', async (_event, params) => {
         // apiKey 清理交给 withDecryptedKey 出作用域 GC
     }
 });
-
-/* ==================== TTS 语音工坊：合成业务 IPC ====================
- * 设计：主进程负责所有百炼 HTTP 请求与音频落盘；渲染进程只管 UI 与 <audio> 播放。
- * 音频通过自定义 ttsfile:// 协议加载（非 file://，非 base64），符合 CSP 与最小传输约束。
- * API Key 加密落盘 + 掩码回传，复用现有 encryptApiKey/maskCred/isMaskedCred 三件套。
- * ============================================================================= */
-
-// TTS 合成防重入标志（避免快速连续点击导致任务堆叠、配额浪费）
-let ttsSynthesizing = false;
-
-// ===== TTS 业务 IPC Handler =====
-
-// 1. 文本→语音合成（核心 handler，涉网 + 涉密钥）
-ipcMain.handle('tts:synthesize', tryWrap(async (_event, params) => {
-    assertPayloadSize(params, MAX_IPC_PAYLOAD_SIZE, 'tts:synthesize 入参');
-    // 防重入：合成耗时 3-10 秒，快速连续点击会导致任务堆叠、配额浪费
-    if (ttsSynthesizing) {
-        throw new Error('上一次语音合成仍在进行中，请等待完成后再试');
-    }
-    ttsSynthesizing = true;
-    try {
-        const s = loadSettings();
-        const cfg = s.aiConfig || {};
-        // baseUrl 三级 fallback：tts 专用 → 图片共用百炼 → 官方默认
-        const baseUrl = cfg.ttsBaseUrl || cfg.dashscopeBaseUrl || 'https://dashscope.aliyuncs.com';
-        validateAiBaseUrl(baseUrl, 'TTS API 地址');
-
-        return await withDecryptedKey(async () => {
-            // key 三级 fallback：tts 专用 → 图片共用百炼 → 聊天通用
-            let k = await decryptSecret(cfg.ttsEncryptedKey, 'API Key');
-            if (!k) k = await decryptSecret(cfg.dashscopeEncryptedKey, 'API Key');
-            if (!k) k = await decryptSecret(cfg.encryptedKey, 'API Key');
-            return k;
-        }, async (apiKey) => {
-            if (!baseUrl) throw new Error('百炼 TTS API 地址未配置');
-            if (!apiKey) throw new Error('API Key 未配置，请在设置面板的语音模型配置中填写');
-
-            const text = params.text || '';
-            // 项目硬约束：TTS 文本上限 1000 字符，防超长文本导致合成超时/配额浪费
-            if (text.length > 1000) throw new Error('TTS 文本超出 1000 字符限制（当前 ' + text.length + ' 字符）');
-            // 音色：仅使用渲染进程传入的 voice，不回退到 cfg.ttsVoice
-            // 原因：cfg.ttsVoice 可能在用户切换模型后变为过期值（旧模型音色与新模型不匹配），回退会导致 411 Engine error
-            // 渲染进程已实现音色持久化（防抖保存 + initTtsVoiceSelect 恢复），voice 始终与当前模型匹配
-            const voice = params.voice || '';
-            // 模型 cosyvoice-v1，情感控制通过 parameters.instruct 字段实现
-            let model = params.model || cfg.ttsModel || 'cosyvoice-v1';
-            const instruct = params.instruct || '';
-            const format = params.format || cfg.ttsFormat || 'mp3';
-
-            // 调百炼 TTS Service（SSRF 校验 + fetch + 落盘）
-            const result = await dashscopeTts(baseUrl, apiKey, model, voice, text, instruct, format);
-            // 合成成功后自动保存音频到统一保存路径（图片/视频/TTS 共用 imageSavePath）
-            try {
-                const saveDir = (cfg.imageSavePath || cfg.dashscopeSavePath) || '';
-                if (saveDir) {
-                    // 从 ttsfile:// URL 解析本地文件路径
-                    const ttsUrl = new URL(result.url);
-                    const cacheDir = getTtsCacheDir();
-                    const cacheFile = decodeURIComponent(ttsUrl.pathname.slice(1));
-                    const srcPath = path.join(cacheDir, cacheFile);
-                    if (fs.existsSync(srcPath)) {
-                        if (!fs.existsSync(saveDir)) { fs.mkdirSync(saveDir, { recursive: true }); }
-                        const ext = path.extname(cacheFile) || '.mp3';
-                        const autoName = 'tts_' + Date.now() + ext;
-                        fs.copyFileSync(srcPath, path.join(saveDir, autoName));
-                        console.log('[TTS] 音频已自动保存到:', path.join(saveDir, autoName));
-                    }
-                }
-            } catch (autoErr) {
-                // 自动保存失败不影响主流程（缓存里已有，用户可手动下载）
-                console.warn('[TTS] 自动保存音频失败:', autoErr.message);
-            }
-            return { success: true, url: result.url, durationMs: result.durationMs };
-        });
-    } finally {
-        ttsSynthesizing = false;
-        // apiKey 清理交给 withDecryptedKey 出作用域 GC
-    }
-}));
-
-// 2. 手动触发缓存清理（不涉网，调 cleanTtsCache）
-ipcMain.handle('tts:cleanup-cache', tryWrap(async () => {
-    const result = await cleanTtsCache();
-    return { success: true, deleted: result.deleted };
-}));
-
-// 下载音频文件 —— 用 dialog.showSaveDialog 替代 <a download> blob（CSP 严格时 blob download 不可靠）
-// 复用 chat:export-markdown 的模式：主进程弹保存对话框 + 同步落盘
-ipcMain.handle('tts:save-audio', tryWrap(async (_event, { ttsUrl, suggestedName }) => {
-    if (!ttsUrl || typeof ttsUrl !== 'string') throw new Error('音频 URL 无效');
-    // 从 ttsfile:// URL 解析本地文件路径（与 ttsfile protocol handler 同款校验）
-    const url = new URL(ttsUrl);
-    const dir = getTtsCacheDir();
-    const fileName = decodeURIComponent(url.pathname.slice(1));
-    const filePath = path.normalize(path.join(dir, fileName));
-    // 路径穿越防护
-    if (filePath !== dir && !filePath.startsWith(dir + path.sep)) {
-        throw new Error('音频文件路径非法');
-    }
-    if (!fs.existsSync(filePath)) throw new Error('音频文件不存在，可能已被缓存清理');
-    // 弹保存对话框
-    const ext = path.extname(filePath).slice(1) || 'mp3';
-    const safeName = (suggestedName || 'tts_audio').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
-    const result = await dialog.showSaveDialog({
-        title: '保存语音文件',
-        defaultPath: safeName + '_' + Date.now() + '.' + ext,
-        filters: [
-            { name: '音频文件', extensions: [ext] },
-            { name: '所有文件', extensions: ['*'] }
-        ]
-    });
-    if (result.canceled || !result.filePath) {
-        return { success: false, canceled: true };
-    }
-    // 同步复制文件到用户选择的路径
-    fs.copyFileSync(filePath, result.filePath);
-    return { success: true, path: result.filePath };
-}));
 
 /* ==================== 音乐模块 IPC Handler（V7.4 P0 骨架）====================
  * 设计与 TTS 同构：tryWrap 统一异常捕获，主进程负责文件 I/O，渲染进程零 base64 内存占用。
@@ -5021,31 +4737,6 @@ app.whenReady().then(async () => {
             return await serveLocalFile(request.url, getChatImagesDir(), mimeMap, { maxSize: MAX_IMAGE_SIZE });
         } catch (e) {
             console.error('chatimg 协议读取失败:', e.message);
-            return new Response('Server Error', { status: 500 });
-        }
-    });
-
-    /* ===== ttsfile 协议处理：读取 tts_cache 目录下的音频返回给渲染进程 =====
-     * URL 形如 ttsfile://tts_cache/<filename>，filename 经 encodeURIComponent 编码。
-     * 安全与 chatimg 同构：
-     *   1. 路径穿越防护：normalize 后路径必须仍在 tts_cache 目录内
-     *   2. realpath 二次校验：解析符号链接后仍必须在目录内（防 symlink 逃逸）
-     *   3. 异步 stat + 文件类型 + 大小校验（≤ 20MB，复用 MAX_IMAGE_SIZE 常量思路）
-     *   4. 异步 readFile，避免 readFileSync 阻塞主进程导致多音频加载时 UI 卡顿
-     */
-    protocol.handle('ttsfile', async (request) => {
-        try {
-            const mimeMap = {
-                '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
-                '.flac': 'audio/flac', '.aac': 'audio/aac', '.m4a': 'audio/mp4'
-            };
-            return await serveLocalFile(request.url, getTtsCacheDir(), mimeMap, {
-                maxSize: MAX_IMAGE_SIZE,
-                defaultMime: 'audio/mpeg',
-                requireRealpath: true
-            });
-        } catch (e) {
-            console.error('ttsfile 协议读取失败:', e.message);
             return new Response('Server Error', { status: 500 });
         }
     });
