@@ -12,6 +12,9 @@ const fileLocks = new Map();
  * 同步读取 JSON 文件。
  * - 文件不存在（ENOENT）：返回 fallback，不报错
  * - 解析失败（损坏）：自动备份为 .corrupt-<ts> 文件后返回 fallback
+ *
+ * 仅用于启动时同步初始化（如 settingsCache、activityCache）。
+ * IPC handler 等异步场景应使用 loadJSONAsync，避免阻塞主进程事件循环。
  * @param {string} filePath - JSON 文件绝对路径
  * @param {*} fallback - 文件不存在或解析失败时的返回值
  * @returns {*} 解析后的对象或 fallback
@@ -27,6 +30,36 @@ function loadJSON(filePath, fallback) {
         try {
             const backupPath = filePath + '.corrupt-' + Date.now();
             fs.copyFileSync(filePath, backupPath);
+            console.error('已备份损坏文件到:', backupPath);
+        } catch (_) { /* 忽略备份失败 */ }
+        return fallback;
+    }
+}
+
+/**
+ * 异步读取 JSON 文件（非阻塞，IPC handler 应优先使用此版本）。
+ * 行为与 loadJSON 完全一致：ENOENT 返回 fallback，损坏文件自动备份。
+ * @param {string} filePath - JSON 文件绝对路径
+ * @param {*} fallback - 文件不存在或解析失败时的返回值
+ * @returns {Promise<*>} 解析后的对象或 fallback
+ */
+async function loadJSONAsync(filePath, fallback) {
+    let raw;
+    try {
+        raw = await fs.promises.readFile(filePath, 'utf-8');
+    } catch (err) {
+        if (err.code === 'ENOENT') return fallback;
+        console.error('读 JSON 失败:', err.message);
+        return fallback;
+    }
+    try {
+        return JSON.parse(raw);
+    } catch (parseErr) {
+        // 文件存在但解析失败（损坏）：异步备份后返回 fallback
+        console.error('解析 JSON 失败:', parseErr.message);
+        try {
+            const backupPath = filePath + '.corrupt-' + Date.now();
+            await fs.promises.copyFile(filePath, backupPath);
             console.error('已备份损坏文件到:', backupPath);
         } catch (_) { /* 忽略备份失败 */ }
         return fallback;
@@ -89,14 +122,27 @@ async function doSaveJSON(filePath, data) {
                 await new Promise(r => setTimeout(r, wait));
             }
         }
-        // 降级：copy + unlink
+        // 降级：copy 到新临时文件后 rename（原子替换，防 copy 中途崩溃导致目标文件截断）
+        let tmp2 = null;
         try {
-            fs.copyFileSync(tmp, filePath);
-            try { fs.unlinkSync(tmp); } catch (_) {}
-            return true;
+            tmp2 = filePath + '.replace-' + uniqueId + '.tmp';
+            fs.copyFileSync(tmp, tmp2);
+            try {
+                fs.renameSync(tmp2, filePath);
+                return true;
+            } catch (e3) {
+                // rename 仍失败（极少见），fallback 到直接 copy（保留原降级行为兜底）
+                try { fs.unlinkSync(tmp2); } catch (_) {}
+                fs.copyFileSync(tmp, filePath);
+                return true;
+            }
         } catch (e2) {
             console.error('写 JSON 失败（rename 重试与降级均失败）:', e2.message, '原始错误:', lastErr && lastErr.message);
             return false;
+        } finally {
+            if (tmp2 && fs.existsSync(tmp2)) {
+                try { fs.unlinkSync(tmp2); } catch (_) {}
+            }
         }
     } catch (err) {
         console.error('写 JSON 失败:', err.message);
@@ -115,26 +161,44 @@ async function doSaveJSON(filePath, data) {
  * @returns {boolean} 是否写入成功
  */
 function saveJSONSync(filePath, data) {
+    let tmp = null;
     try {
         const uniqueId = process.pid + '-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
-        const tmp = filePath + '.' + uniqueId + '.tmp';
+        tmp = filePath + '.' + uniqueId + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
         try {
             fs.renameSync(tmp, filePath);
             return true;
         } catch (e) {
-            // rename 失败（占用/跨卷），降级 copy+unlink，不重试（退出场景需快速完成）
+            // rename 失败（占用/跨卷），降级：copy 到新临时文件后 rename（原子替换），不重试（退出场景需快速完成）
+            let tmp2 = null;
             try {
-                fs.copyFileSync(tmp, filePath);
-                try { fs.unlinkSync(tmp); } catch (_) {}
-                return true;
+                tmp2 = filePath + '.replace-' + uniqueId + '.tmp';
+                fs.copyFileSync(tmp, tmp2);
+                try {
+                    fs.renameSync(tmp2, filePath);
+                    return true;
+                } catch (e3) {
+                    // rename 仍失败，fallback 到直接 copy
+                    try { fs.unlinkSync(tmp2); } catch (_) {}
+                    fs.copyFileSync(tmp, filePath);
+                    return true;
+                }
             } catch (e2) {
                 console.error('saveJSONSync 失败:', e2.message);
-                try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {}
                 return false;
+            } finally {
+                if (tmp2 && fs.existsSync(tmp2)) {
+                    try { fs.unlinkSync(tmp2); } catch (_) {}
+                }
             }
         }
     } catch (err) { console.error('saveJSONSync 写入失败:', err.message); return false; }
+    finally {
+        if (tmp && fs.existsSync(tmp)) {
+            try { fs.unlinkSync(tmp); } catch (_) {}
+        }
+    }
 }
 
-module.exports = { loadJSON, saveJSON, saveJSONSync };
+module.exports = { loadJSON, loadJSONAsync, saveJSON, saveJSONSync };

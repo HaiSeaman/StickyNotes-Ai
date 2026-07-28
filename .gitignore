@@ -1,8 +1,10 @@
 node_modules
-.reasonix
+.reasonrix
 *.log
 *.exe
 .DS_Store
 .idea
 dist/
 dist
+test/screenshots/
+test/screenshots_full/

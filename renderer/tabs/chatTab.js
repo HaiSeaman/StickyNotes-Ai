@@ -8,27 +8,8 @@
 (function () {
     'use strict';
 
-    /**
-     * 数字补零辅助函数
-     * @param {number} n
-     * @returns {string}
-     */
-    function pad2(n) {
-        return String(n).padStart(2, '0');
-    }
-
-    /**
-     * 聊天时间格式化
-     * @param {number} ts - 时间戳
-     * @param {boolean} withDate - 是否包含日期（YYYY-MM-DD）
-     * @returns {string}
-     */
-    function formatChatTime(ts, withDate = false) {
-        if (!ts) return '';
-        const d = new Date(ts);
-        const hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
-        return withDate ? (d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + hm) : hm;
-    }
+    // 公共工具函数从 renderer/utils.js 引入（消除与 renderer.js 的重复定义）
+    const { pad2, formatChatTime } = window.RendererUtils;
 
     /**
      * 根据输入文本自动生成会话标题
@@ -109,7 +90,7 @@
                     if (textEl) textEl.textContent = origText || '复制';
                     copyBtn.classList.remove('copied');
                 }, 1200);
-            } catch (_) {}
+            } catch (e) { console.warn('复制聊天内容失败:', e.message); }
         });
         el.appendChild(copyBtn);
         return el;
@@ -545,7 +526,7 @@
             if (window.api && typeof window.api.abortChat === 'function') {
                 try {
                     window.api.abortChat();
-                } catch (_) {}
+                } catch (e) { console.warn('中断聊天请求失败:', e.message); }
             }
         }
     }

@@ -1,13 +1,18 @@
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
-const { getTtsCacheDir } = require('../paths');
-
-const TTS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;  // 7 天
-const TTS_CACHE_MAX_SIZE = 100 * 1024 * 1024;            // 100MB
 
 /**
- * 公共本地文件服务：为 chatimg/ttsfile 协议提供统一的文件读取逻辑。
+ * 公共本地文件服务：为 chatimg 协议提供统一的文件读取逻辑。
+ * 包含路径穿越防护、stat 校验、大小限制、MIME 映射、异步读取。
+ *
+ * @param {string} requestUrl - 协议请求的 URL（如 chatimg://chat-images/xxx.png）
+ * @param {string} dir - 文件所在目录的绝对路径
+ * @param {Object} mimeMap - 扩展名到 MIME 类型的映射
+ * @param {Object} [options]
+ * @param {string} [options.defaultMime='application/octet-stream'] - 未知扩展名的默认 MIME
+ * @param {number} [options.maxSize=0] - 文件大小上限（字节，0 表示不限制）
+ * @param {boolean} [options.requireRealpath=false] - 是否做 realpath 符号链接二次校验
+ * @returns {Promise<Response>} Electron 协议 Response 对象
  */
 async function serveLocalFile(requestUrl, dir, mimeMap, options) {
     options = options || {};
@@ -51,57 +56,6 @@ async function serveLocalFile(requestUrl, dir, mimeMap, options) {
     return new Response(buffer, { headers: { 'Content-Type': contentType, 'Cache-Control': 'max-age=3600' } });
 }
 
-/**
- * 静默清理 TTS 缓存
- */
-async function cleanTtsCache() {
-    const dir = getTtsCacheDir();
-    let deleted = 0;
-    try {
-        const entries = await fs.promises.readdir(dir);
-        const now = Date.now();
-        const stats = await Promise.all(entries.map(async (name) => {
-            try {
-                const filePath = path.join(dir, name);
-                const st = await fs.promises.stat(filePath);
-                return { name, filePath, mtime: st.mtimeMs, size: st.size, isFile: st.isFile() };
-            } catch (_) {
-                return null;
-            }
-        }));
-        const files = stats.filter(s => s && s.isFile);
-        for (const f of files) {
-            if (now - f.mtime > TTS_CACHE_MAX_AGE_MS) {
-                try { await fs.promises.unlink(f.filePath); deleted++; } catch (_) {}
-            }
-        }
-        const remaining = files.filter(f => now - f.mtime <= TTS_CACHE_MAX_AGE_MS);
-        let totalSize = remaining.reduce((sum, f) => sum + f.size, 0);
-        remaining.sort((a, b) => a.mtime - b.mtime);
-        for (const f of remaining) {
-            if (totalSize <= TTS_CACHE_MAX_SIZE) break;
-            try { await fs.promises.unlink(f.filePath); totalSize -= f.size; deleted++; } catch (_) {}
-        }
-    } catch (e) {
-        if (e.code !== 'ENOENT') console.error('清理 TTS 缓存失败:', e.message);
-    }
-    return { deleted };
-}
-
-/**
- * 将音频 Buffer 异步落盘到 tts_cache/，返回 ttsfile:// URL。
- */
-async function saveAudioToTtsCache(audioBuffer, ext) {
-    const dir = getTtsCacheDir();
-    await fs.promises.mkdir(dir, { recursive: true });
-    const fileName = 'tts_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex') + '.' + (ext || 'mp3');
-    const filePath = path.join(dir, fileName);
-    await fs.promises.writeFile(filePath, audioBuffer);
-    return 'ttsfile://tts_cache/' + encodeURIComponent(fileName);
-}
-
 module.exports = {
-    serveLocalFile,
-    cleanTtsCache,
-    saveAudioToTtsCache
+    serveLocalFile
 };

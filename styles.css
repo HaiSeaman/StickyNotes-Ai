@@ -1742,7 +1742,7 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
 /* ==================================================
  * 音乐页（V7.4 P1+P2 完整实现）
  * 布局：左右双栏（音乐播放器 / FM 收音机），窄屏自动堆叠
- * 主题：沿用毛玻璃 + 暗色风格，与 TTS 页保持一致
+ * 主题：沿用毛玻璃 + 暗色风格
  * ================================================== */
 .tab-music{padding:8px}
 .music-panel{
@@ -2237,21 +2237,5 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
 .fm-input.error{border-color:var(--accent-rose);}
 .fm-input.error:focus{box-shadow:0 0 0 2px rgba(224,139,139,0.25);}
 
-/* 底部工具栏：清理缓存等辅助操作 */
-.tts-footer{
-    display:flex;justify-content:flex-end;align-items:center;
-    padding-top:8px;border-top:1px solid var(--border);
-    margin-top:auto;flex-shrink:0;
-}
-/* 清理缓存按钮 */
-.tts-cleanup-btn{
-    padding:6px 12px;font-size:11px;cursor:pointer;
-    background:transparent;border:1px solid var(--border);color:var(--text-3);
-    border-radius:6px;display:inline-flex;align-items:center;justify-content:center;
-    transition:all 0.15s;
-}
-.tts-cleanup-btn:hover{background:var(--surface-hover);color:var(--accent-amber);border-color:var(--accent-amber)}
-.tts-cleanup-btn:disabled{opacity:0.5;cursor:not-allowed}
-
-/* Loading 旋转动画（TTS 合成按钮等复用） */
+/* Loading 旋转动画（按钮加载状态等复用） */
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}

@@ -14,9 +14,10 @@ const { parseNodeStream } = require('music-metadata-browser');
 // 加载时立即劫持 console 并注册 process 异常处理，所有 console.log/warn/error 自动旁路记录
 const logger = require('./logger');
 
-const { registerAiHandlers } = require('./services/aiService');
 const { webdavRequest } = require('./services/syncService');
-const { serveLocalFile, cleanTtsCache, saveAudioToTtsCache } = require('./main/protocol');
+const { serveLocalFile } = require('./main/protocol');
+const { streamDownloadToFile } = require('./main/downloadUtils');
+const { extractHttpError } = require('./main/httpUtils');
 const { getOverlayLoggerScript, getPopoutCommonCss, buildPopoutHtml } = require('./main/popoutTemplate');
 
 /* ==================== 全局变量 ==================== */
@@ -47,12 +48,10 @@ const {
 } = require('./security');
 
 // JSON 文件原子读写（loadJSON / saveJSON / saveJSONSync）：损坏自动备份 + Windows EPERM 重试
-const { loadJSON, saveJSON, saveJSONSync } = require('./json-io');
+const { loadJSON, loadJSONAsync, saveJSON, saveJSONSync } = require('./json-io');
 const { trimTrailingSlash } = require('./shared-utils');
 
 // 路由解耦模块导入
-const { registerAiIpc } = require('./main/ipc/aiIpc');
-const { registerNotesIpc } = require('./main/ipc/notesIpc');
 const { registerSystemIpc } = require('./main/ipc/systemIpc');
 
 /* ==================== 文件路径 ====================
@@ -69,7 +68,6 @@ const {
     getCalendarPath,
     getActivityPath,
     getChatImagesDir,
-    getTtsCacheDir,
     getMusicDir,
     getMusicPlaylistPath,
     getMusicCoversDir,
@@ -77,28 +75,6 @@ const {
     getRadioCachePath,
     getRadioFavoritesPath,
 } = require('./paths');
-
-/* ==================== TTS 语音缓存基础设施 ====================
- * 合成音频一律落盘到 userData/tts_cache/，渲染进程通过 ttsfile:// 协议按需加载。
- * 设计与 chat-images 同构：前端零 base64 内存占用，主进程统一管控文件生命周期。
- * 缓存策略：7 天过期 + 100MB 总量上限，app 启动时静默清理（异步、不阻塞启动）。
- * ============================================================= */
-const TTS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;  // 7 天
-const TTS_CACHE_MAX_SIZE = 100 * 1024 * 1024;            // 100MB
-
-/**
- * 公共本地文件服务：为 chatimg/ttsfile 协议提供统一的文件读取逻辑。
- * 包含路径穿越防护、stat 校验、大小限制、MIME 映射、异步读取。
- *
- * @param {string} requestUrl - 协议请求的 URL（如 chatimg://chat-images/xxx.png）
- * @param {string} dir - 文件所在目录的绝对路径
- * @param {Object} mimeMap - 扩展名到 MIME 类型的映射
- * @param {Object} [options]
- * @param {string} [options.defaultMime='application/octet-stream'] - 未知扩展名的默认 MIME
- * @param {number} [options.maxSize=0] - 文件大小上限（字节，0 表示不限制）
- * @param {boolean} [options.requireRealpath=false] - 是否做 realpath 符号链接二次校验
- * @returns {Promise<Response>} Electron 协议 Response 对象
- */
 
 
 /* ==================== chatimg 自定义协议 ====================
@@ -212,7 +188,7 @@ function createSunIcon(size) {
             const img = nativeImage.createFromBitmap(buf, { width: size, height: size });
             if (img && !img.isEmpty()) return img;
         }
-    } catch (_) { /* fallback */ }
+    } catch (e) { console.warn('生成图标失败:', e.message); /* fallback */ }
 
     // 仅小尺寸有 dataURL 像素兜底；大尺寸无兜底（返回 null，由调用方处理）
     if (!isLarge) {
@@ -259,11 +235,11 @@ async function parseSSEStream(resp, onChunk) {
                 if (!line.startsWith('data:')) continue;      // 只处理 data: 帧
                 const data = line.slice(5).trim();
                 if (data === '[DONE]') continue;              // OpenAI 流结束标记
-                try { onChunk(JSON.parse(data)); } catch (_) { /* 单行解析失败跳过 */ }
+                try { onChunk(JSON.parse(data)); } catch (e) { console.warn('解析SSE行失败:', e.message); /* 单行解析失败跳过 */ }
             }
         }
     } finally {
-        try { reader.releaseLock(); } catch (_) {}
+        try { reader.releaseLock(); } catch (e) { console.warn('释放流锁失败:', e.message); }
     }
 }
 
@@ -357,7 +333,7 @@ function attachSecurityHandlers(win) {
             if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
                 shell.openExternal(url);
             }
-        } catch (_) {}
+        } catch (e) { console.warn('打开外部链接失败:', e.message); }
         return { action: 'deny' };
     });
     win.webContents.on('will-navigate', (e, url) => {
@@ -392,7 +368,7 @@ function bindWindowBoundsEvents(win) {
             const s = loadSettings();
             s.windowBounds = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
             persistSettings();
-        } catch (_) {}
+        } catch (e) { console.warn('持久化窗口位置失败:', e.message); }
     };
     win.on('resize', () => {
         if (windowBoundsDebounceTimer) clearTimeout(windowBoundsDebounceTimer);
@@ -421,7 +397,7 @@ function createWindow() {
         if (typeof mainWindow.setBackgroundMaterial === 'function') {
             mainWindow.setBackgroundMaterial('mica');
         }
-    } catch (_) { /* 忽略 */ }
+    } catch (e) { console.warn('设置窗口背景失败:', e.message); }
 
     attachSecurityHandlers(mainWindow);
     mainWindow.loadFile('index.html');
@@ -441,7 +417,7 @@ function createWindow() {
         if (taskbarIcon && !taskbarIcon.isEmpty() && typeof mainWindow.setOverlayIcon === 'function') {
             mainWindow.setOverlayIcon(taskbarIcon, '便签');
         }
-    } catch (_) { /* 忽略 */ }
+    } catch (e) { console.warn('设置任务栏图标失败:', e.message); }
 
     mainWindow.on('closed', () => { mainWindow = null; });
     mainWindow.on('focus', () => { quitRetryCount = 0; });
@@ -482,7 +458,7 @@ function validateWindowBounds(bounds) {
                 width: w, height: h
             };
         }
-    } catch (_) {}
+    } catch (e) { console.warn('校验窗口位置失败:', e.message); }
     return { x, y, width: w, height: h };
 }
 
@@ -590,8 +566,9 @@ function openPopoutWindowCommon(opts) {
     // 安全：阻止 popout 窗口打开新窗口 / 导航到外部 URL（防 XSS 后 RCE）
     win.webContents.setWindowOpenHandler(() => { return { action: 'deny' }; });
     win.webContents.on('will-navigate', (e, url) => {
-        // data: URL 加载的文档不允许导航到任何其他 URL
-        if (!url || !url.startsWith('data:')) e.preventDefault();
+        // 修复：原实现允许导航到 data: URL，XSS 后可跳转到无 CSP 的 data: 文档脱离约束
+        // popout 是单页文档，应拒绝所有导航
+        e.preventDefault();
     });
     win.once('ready-to-show', () => {
         win.show();
@@ -603,7 +580,7 @@ function openPopoutWindowCommon(opts) {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send(closedChannel, { noteId });
             }
-        } catch (_) {}
+        } catch (e) { console.warn('通知主窗口关闭失败:', e.message); }
     });
     map.set(noteId, win);
     return { success: true };
@@ -625,7 +602,7 @@ function togglePopoutPin(noteId, type) {
     // 通知小窗口自身更新按钮 UI
     try {
         win.webContents.send('popout-pin-changed', { pinned: next });
-    } catch (_) {}
+    } catch (e) { console.warn('通知置顶状态失败:', e.message); }
     return { success: true, pinned: next };
 }
 
@@ -891,7 +868,7 @@ pinBtn.addEventListener('click', async () => {
             pinBtn.classList.toggle('active', r.pinned);
             pinBtn.title = r.pinned ? '已置顶（点击取消置顶）' : '未置顶（点击置顶）';
         }
-    } catch (_) {}
+    } catch (e) { console.warn('切换置顶失败:', e.message); }
 });
 
 // 监听主进程推送的待办更新（主窗口改 → 推给小窗口）
@@ -941,12 +918,7 @@ ipcMain.on('popout-note:input', (_event, data) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('popout-note:update', data);
         }
-        // 同时把内容推送给所有同名小窗口（避免有多个时不同步，正常情况只有一个）
-        const win = popoutWindows.get(String(data.noteId));
-        if (win && !win.isDestroyed()) {
-            // 不回推给来源窗口避免死循环
-        }
-    } catch (_) {}
+    } catch (e) { console.warn('转发便签输入失败:', e.message); }
 });
 
 // 主窗口内容变化时推送给小窗口
@@ -957,7 +929,7 @@ ipcMain.on('popout-note:push-from-main', (_event, data) => {
         if (win && !win.isDestroyed()) {
             win.webContents.send('popout-note:push', data);
         }
-    } catch (_) {}
+    } catch (e) { console.warn('推送便签更新失败:', e.message); }
 });
 
 /* ==================== 待办事项小窗口 IPC ==================== */
@@ -982,7 +954,7 @@ ipcMain.on('popout-todo:input', (_event, data) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('popout-todo:update', data);
         }
-    } catch (_) {}
+    } catch (e) { console.warn('转发待办输入失败:', e.message); }
 });
 
 // 主窗口待办变化时推送给待办小窗口
@@ -993,7 +965,7 @@ ipcMain.on('popout-todo:push-from-main', (_event, data) => {
         if (win && !win.isDestroyed()) {
             win.webContents.send('popout-todo:push', data);
         }
-    } catch (_) {}
+    } catch (e) { console.warn('推送待办更新失败:', e.message); }
 });
 
 /* ==================== 小窗口置顶切换 IPC ==================== */
@@ -1012,18 +984,20 @@ app.on('before-quit', () => {
     const closeAllPopouts = (set) => {
         set.forEach((win) => {
             if (!win || win.isDestroyed()) return;
-            try { win.close(); } catch (_) {}
+            try { win.close(); } catch (e) { console.warn('关闭窗口失败:', e.message); }
             // close 异步，兜底强制销毁（下一轮事件循环）
-            setTimeout(() => { try { if (!win.isDestroyed()) win.destroy(); } catch (_) {} }, 0);
+            setTimeout(() => { try { if (!win.isDestroyed()) win.destroy(); } catch (e) { console.warn('销毁窗口失败:', e.message); } }, 0);
         });
         set.clear();
     };
-    try { closeAllPopouts(popoutWindows); } catch (_) {}
-    try { closeAllPopouts(todoPopoutWindows); } catch (_) {}
+    try { closeAllPopouts(popoutWindows); } catch (e) { console.warn('关闭便签小窗口失败:', e.message); }
+    try { closeAllPopouts(todoPopoutWindows); } catch (e) { console.warn('关闭待办小窗口失败:', e.message); }
     // 刷盘活跃度防抖计数，避免退出时丢失最近 1.5s 内的操作
-    try { flushActivity(); } catch (_) {}
+    try { flushActivity(); } catch (e) { console.warn('保存活动数据失败:', e.message); }
+    // 退出前同步刷盘所有未落盘的历史快照，防数据丢失
+    try { flushAllNoteHistorySync(); } catch (e) { console.warn('刷盘历史快照失败:', e.message); }
     // 退出前刷盘日志，防最后一批日志丢失（与 will-quit 互为兜底）
-    try { logger.flushLogFile(); } catch (_) {}
+    try { logger.flushLogFile(); } catch (e) { console.warn('刷盘日志失败:', e.message); }
 });
 
 /* ==================== 托盘创建 ==================== */
@@ -1053,7 +1027,7 @@ function createTray() {
 /* ==================== IPC 处理器 ==================== */
 
 // 便签数据
-ipcMain.handle('notes:load', () => loadJSON(getNotesPath(), []));
+ipcMain.handle('notes:load', () => loadJSONAsync(getNotesPath(), []));
 // 标记写盘是否进行中：退出时若仍在写，延迟退出以免数据丢失
 // 使用计数器而非布尔值，支持多个 IPC 通道并发保存（如 notes:save 与 calendar:save 交错）
 let pendingSaveCount = 0;
@@ -1093,24 +1067,24 @@ function tryWrap(fn) {
 ipcMain.handle('notes:save', wrapSaveHandler(getNotesPath, '便签数据'));
 
 // 归档便签数据（独立的 notes_archived.json，结构与 notes.json 相同）
-ipcMain.handle('notes:load-archived', () => loadJSON(getArchivedNotesPath(), []));
+ipcMain.handle('notes:load-archived', () => loadJSONAsync(getArchivedNotesPath(), []));
 ipcMain.handle('notes:save-archived', wrapSaveHandler(getArchivedNotesPath, '归档便签数据'));
 
 // 垃圾桶便签数据（独立的 notes_trashed.json，结构相同，含 trashedAt 字段）
-ipcMain.handle('notes:load-trashed', () => loadJSON(getTrashedNotesPath(), []));
+ipcMain.handle('notes:load-trashed', () => loadJSONAsync(getTrashedNotesPath(), []));
 ipcMain.handle('notes:save-trashed', wrapSaveHandler(getTrashedNotesPath, '回收站便签数据'));
 
 // 聊天归档数据（独立的 chats_archived.json，结构与 aiChats 一致，含 archivedAt 字段）
-ipcMain.handle('chat:load-archived', () => loadJSON(getArchivedChatsPath(), []));
+ipcMain.handle('chat:load-archived', () => loadJSONAsync(getArchivedChatsPath(), []));
 ipcMain.handle('chat:save-archived', wrapSaveHandler(getArchivedChatsPath, '归档聊天数据'));
 
 // 聊天垃圾桶数据（独立的 chats_trashed.json，结构相同，含 trashedAt 字段）
-ipcMain.handle('chat:load-trashed', () => loadJSON(getTrashedChatsPath(), []));
+ipcMain.handle('chat:load-trashed', () => loadJSONAsync(getTrashedChatsPath(), []));
 ipcMain.handle('chat:save-trashed', wrapSaveHandler(getTrashedChatsPath, '回收站聊天数据'));
 
 // 日历数据：日期↔闹钟映射，存入 calendar.json
 // 结构：{ "2026-07-16": { alarms: [{h,m,s,label,sound,enabled}] } }
-ipcMain.handle('calendar:load', () => loadJSON(getCalendarPath(), {}));
+ipcMain.handle('calendar:load', () => loadJSONAsync(getCalendarPath(), {}));
 ipcMain.handle('calendar:save', wrapSaveHandler(getCalendarPath, '日历数据'));
 
 /* ==================== 活跃度数据（热力图数据源） ====================
@@ -1144,7 +1118,7 @@ function flushActivity() {
         activityPersistTimer = null;
     }
     if (activityCache) {
-        try { saveJSONSync(getActivityPath(), activityCache); } catch (_) {}
+        try { saveJSONSync(getActivityPath(), activityCache); } catch (e) { console.warn('保存活动数据失败:', e.message); }
     }
 }
 
@@ -1310,23 +1284,7 @@ function sendHttpRequest(lib, opts, body) {
     });
 }
 
-// 统一从 HTTP 错误响应中提取可读信息（ai:generate / ai:chat 共用）
-async function extractHttpError(resp) {
-    let errMsg = 'HTTP ' + resp.status;
-    try {
-        const errJson = await resp.json();
-        if (errJson.error && errJson.error.message) {
-            errMsg += ': ' + errJson.error.message;
-        } else {
-            const text = await resp.text().catch(() => resp.statusText);
-            errMsg += ': ' + text;
-        }
-    } catch (_) {
-        const text = await resp.text().catch(() => '');
-        errMsg += ': ' + (text || resp.statusText);
-    }
-    return errMsg;
-}
+// extractHttpError 已提取到 main/httpUtils.js，便于单元测试
 
 // 包装 fetch：把底层网络错误转成用户能看懂的提示
 async function safeFetch(url, options) {
@@ -1359,7 +1317,7 @@ async function getBackupFiles() {
         try {
             const stat = await fs.promises.stat(f.path);
             if (stat.isFile()) result.push(f);
-        } catch (_) { /* 忽略 stat 失败的文件 */ }
+        } catch (e) { console.warn('获取文件信息失败:', e.message); /* 忽略 stat 失败的文件 */ }
     }
     return result;
 }
@@ -1548,7 +1506,7 @@ async function downloadS3Backup(config, key) {
     // 大小上限校验：先看 S3 响应的 ContentLength，超 200MB 直接拒绝
     const contentLength = parseInt(data.ContentLength || '0', 10);
     if (contentLength > MAX_BACKUP_SIZE) {
-        try { data.Body.destroy(); } catch (_) {}
+        try { data.Body.destroy(); } catch (e) { console.warn('关闭S3响应流失败:', e.message); }
         throw new Error(`备份文件过大（${(contentLength/1024/1024).toFixed(1)}MB），超过 200MB 上限`);
     }
     // SDK v3 Body 是 Readable 流，转成 Buffer；同时累计大小防 OOM
@@ -1564,7 +1522,7 @@ async function downloadS3Backup(config, key) {
             chunks.push(buf);
         }
     } catch (e) {
-        try { data.Body.destroy(); } catch (_) {}
+        try { data.Body.destroy(); } catch (err) { console.warn('关闭S3响应流失败:', err.message); }
         throw e;
     }
     return Buffer.concat(chunks);
@@ -1942,9 +1900,9 @@ ipcMain.handle('sync:load-config', async () => {
     // 凭据解密后掩码化回传渲染进程，避免明文凭据进入渲染进程内存（防 DevTools 窥探 / XSS 泄露）
     // 解密失败时（safeStorage 不可用）返回空，前端提示用户重新输入
     let s3AccessKey = '', s3SecretKey = '', webdavPass = '';
-    try { s3AccessKey = await decryptSecret(s3Raw.accessKeyEnc); } catch (_) {}
-    try { s3SecretKey = await decryptSecret(s3Raw.secretKeyEnc); } catch (_) {}
-    try { webdavPass = await decryptSecret(webdavRaw.passEnc); } catch (_) {}
+    try { s3AccessKey = await decryptSecret(s3Raw.accessKeyEnc); } catch (e) { console.warn('解密S3访问密钥失败:', e.message); }
+    try { s3SecretKey = await decryptSecret(s3Raw.secretKeyEnc); } catch (e) { console.warn('解密S3密钥失败:', e.message); }
+    try { webdavPass = await decryptSecret(webdavRaw.passEnc); } catch (e) { console.warn('解密WebDAV密码失败:', e.message); }
     // 旧版明文兼容：加密字段缺失但存在旧版明文字段，掩码化后回传并标记 legacyPlaintext
     const legacyS3 = (!s3AccessKey && !!s3Raw.accessKey) || (!s3SecretKey && !!s3Raw.secretKey);
     const legacyWebdav = !webdavPass && !!webdavRaw.pass;
@@ -2121,7 +2079,8 @@ ipcMain.handle('sync:restore-backup', tryWrap(async (_event, providerKey, fileId
         if (!baseName) { continue; }  // 跳过纯目录条目
         // 安全：禁止恢复 settings.json，防止恶意备份覆盖 PIN 哈希/同步凭据/API Key
         // settings.json 含 lockHash/lockSalt/syncConfig/aiConfig，被替换后 PIN 锁失效、数据流向攻击者
-        if (baseName === 'settings.json') continue;
+        // 修复：Windows 文件系统大小写不敏感，攻击者可用 Settings.json 绕过校验覆盖 settings.json
+        if (baseName.toLowerCase() === 'settings.json') continue;
         const targetPath = path.join(userDataDir, baseName);
         fs.writeFileSync(targetPath, entry.getData());
         restoredCount++;
@@ -2153,7 +2112,7 @@ ipcMain.handle('alarm:show-window', () => {
         if (mainWindow.isMinimized()) mainWindow.restore();
         if (!mainWindow.isVisible()) mainWindow.show();
         mainWindow.focus();
-    } catch (_) { /* 忽略 */ }
+    } catch (e) { console.warn('显示闹钟窗口失败:', e.message); }
 });
 
 // 窗口最大化/还原切换
@@ -2212,7 +2171,7 @@ function loadLockState() {
             delete s.lockCooldownUntil;
             persistSettings();
         }
-    } catch (_) { /* 读取失败保持默认 0，不阻断解锁流程 */ }
+    } catch (e) { console.warn('读取锁定状态失败:', e.message); /* 读取失败保持默认 0，不阻断解锁流程 */ }
 }
 function persistLockState() {
     try {
@@ -2222,7 +2181,7 @@ function persistLockState() {
         if (lockCooldownUntil > Date.now()) s.lockCooldownUntil = lockCooldownUntil;
         else delete s.lockCooldownUntil;
         persistSettings();
-    } catch (_) { /* 持久化失败不影响内存计数 */ }
+    } catch (e) { console.warn('持久化锁定状态失败:', e.message); /* 持久化失败不影响内存计数 */ }
 }
 
 /**
@@ -2343,13 +2302,15 @@ ipcMain.handle('lock:has-pin', () => {
 });
 
 // 清除 PIN（修改 PIN 时先清除再设置，或遗忘时手动清空 settings.json）
-ipcMain.handle('lock:clear-pin', () => {
+// 修复：原实现 persistSettings() 未 await，落盘失败时内存已删 lockHash 但磁盘保留，
+// 重启后 PIN 重新出现，用户以为已清除却仍被锁定
+ipcMain.handle('lock:clear-pin', async () => {
     const s = loadSettings();
     delete s.lockHash;
     delete s.lockSalt;
     delete s.lockFailCount;
     delete s.lockCooldownUntil;
-    persistSettings();
+    await persistSettings();
     lockFailCount = 0;
     lockCooldownUntil = 0;
     lockStateLoaded = true;
@@ -2457,7 +2418,7 @@ const HISTORY_MIN_INTERVAL_MS = 60 * 1000;  // 同条便签 60s 内只生成一�
 function ensureHistoryDir() {
     try {
         if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR, { recursive: true });
-    } catch (_) {}
+    } catch (e) { console.warn('创建历史目录失败:', e.message); }
 }
 
 function getHistoryFilePath(noteId) {
@@ -2475,31 +2436,84 @@ function getHistoryFilePath(noteId) {
 }
 
 /**
- * 读取某条便签的历史快照列表
+ * 便签历史快照内存缓存：避免每次 snapshot/toggle-lock 都同步读写磁盘。
+ * - 读：先查缓存，miss 时从磁盘加载
+ * - 写：更新缓存 + 标记 dirty + 异步落盘（不阻塞 IPC 返回）
+ * - 退出：before-quit 时同步 flush 所有 dirty 项，防数据丢失
+ */
+const noteHistoryCache = new Map();   // noteId -> history array
+const noteHistoryDirty = new Set();   // 待落盘的 noteId 集合
+
+/**
+ * 读取某条便签的历史快照列表（优先走缓存）
  * @param {string|number} noteId
  * @returns {Array<{ts:number, content:string, locked?:boolean}>}
  */
 function readNoteHistory(noteId) {
+    if (noteHistoryCache.has(noteId)) {
+        return noteHistoryCache.get(noteId);
+    }
     try {
         const fp = getHistoryFilePath(noteId);
-        if (!fs.existsSync(fp)) return [];
+        if (!fs.existsSync(fp)) {
+            noteHistoryCache.set(noteId, []);
+            return [];
+        }
         const data = JSON.parse(fs.readFileSync(fp, 'utf8'));
-        if (!Array.isArray(data)) return [];
-        return data;
+        const arr = Array.isArray(data) ? data : [];
+        noteHistoryCache.set(noteId, arr);
+        return arr;
     } catch (_) {
+        noteHistoryCache.set(noteId, []);
         return [];
     }
 }
 
 /**
- * 写入某条便签的历史快照列表
+ * 写入某条便签的历史快照列表（更新缓存 + 异步落盘）
  */
 function writeNoteHistory(noteId, history) {
+    noteHistoryCache.set(noteId, history);
+    noteHistoryDirty.add(noteId);
+    // 异步落盘，不阻塞当前 IPC 返回
+    flushNoteHistoryAsync(noteId).catch(e => {
+        console.error('异步写入历史快照失败:', e.message);
+    });
+}
+
+/**
+ * 异步落盘单个便签的历史快照
+ */
+async function flushNoteHistoryAsync(noteId) {
+    if (!noteHistoryCache.has(noteId)) return;
+    const history = noteHistoryCache.get(noteId);
     try {
         ensureHistoryDir();
         const fp = getHistoryFilePath(noteId);
-        fs.writeFileSync(fp, JSON.stringify(history), 'utf8');
-    } catch (_) {}
+        const ok = await saveJSON(fp, history);
+        if (ok) noteHistoryDirty.delete(noteId);
+    } catch (e) {
+        console.error('写入历史快照失败:', e.message);
+    }
+}
+
+/**
+ * 同步刷盘所有 dirty 历史快照（仅用于退出场景）
+ */
+function flushAllNoteHistorySync() {
+    for (const noteId of noteHistoryDirty) {
+        try {
+            if (!noteHistoryCache.has(noteId)) continue;
+            const history = noteHistoryCache.get(noteId);
+            ensureHistoryDir();
+            const fp = getHistoryFilePath(noteId);
+            // 用原子写替代 writeFileSync，防系统崩溃导致历史快照文件被截断损坏
+            saveJSONSync(fp, history);
+        } catch (e) {
+            console.error('退出刷盘历史快照失败:', e.message);
+        }
+    }
+    noteHistoryDirty.clear();
 }
 
 // 渲染进程调用：保存便签时顺便生成快照（满足时间间隔条件才生成）
@@ -2546,6 +2560,9 @@ ipcMain.handle('note-history:list', (_event, noteId) => {
 // 删除某条便签的所有历史快照（便签被删除时调用）
 ipcMain.handle('note-history:clear', (_event, noteId) => {
     try {
+        // 同步清缓存 + 标记不再 dirty
+        noteHistoryCache.delete(noteId);
+        noteHistoryDirty.delete(noteId);
         const fp = getHistoryFilePath(noteId);
         if (fs.existsSync(fp)) fs.unlinkSync(fp);
         return true;
@@ -2580,7 +2597,7 @@ ipcMain.handle('get-pin-state', () => isPinned);
 ipcMain.handle('toggle-fixed', () => {
     if (!mainWindow) return false;
     isFixed = !isFixed;
-    try { mainWindow.setMovable(!isFixed); } catch(_) {}
+    try { mainWindow.setMovable(!isFixed); } catch (e) { console.warn('设置窗口可移动失败:', e.message); }
     mainWindow.webContents.send('fixed-changed', isFixed);
     return isFixed;
 });
@@ -2879,7 +2896,7 @@ ipcMain.handle('ai:chat', async (event, payload) => {
         // 使用局部变量 ac 固定引用当前请求的 controller，避免模块级 chatAbortController 被并发覆盖后误判
         const ac = new AbortController();
         chatAbortController = ac;
-        const timeoutId = setTimeout(() => { try { ac.abort(); } catch (_) {} }, 180000);
+        const timeoutId = setTimeout(() => { try { ac.abort(); } catch (e) { console.warn('中止请求失败:', e.message); } }, 180000);
         let aborted = false;  // 标记是否被用户主动中断
 
         // 解析 SSE 流
@@ -2968,7 +2985,7 @@ ipcMain.handle('ai:chat', async (event, payload) => {
 // 中断当前 AI 对话请求（用户点击暂停按钮时调用）
 ipcMain.handle('chat:abort', () => {
     if (chatAbortController) {
-        try { chatAbortController.abort(); } catch (_) {}
+        try { chatAbortController.abort(); } catch (e) { console.warn('中止对话请求失败:', e.message); }
         chatAbortController = null;
         return true;
     }
@@ -3024,7 +3041,7 @@ ipcMain.handle('ai:save-image-config', async (_event, config) => {
         if (config.model !== undefined) s.aiConfig.imageModel = config.model || 'dall-e-3';
         if (config.size !== undefined) s.aiConfig.imageSize = config.size || '1024x1024';
     }
-    // 保存路径统一存储到 imageSavePath（图片/视频/TTS 三模块共用同一保存路径）
+    // 保存路径统一存储到 imageSavePath（图片/视频共用同一保存路径）
     // 同时同步到 dashscopeSavePath 以兼容旧版配置读取逻辑
     if (config.savePath !== undefined) {
         s.aiConfig.imageSavePath = config.savePath;
@@ -3049,10 +3066,10 @@ ipcMain.handle('ai:load-image-config', async () => {
     const provider = cfg.imageProvider || 'openai';
     // 掩码化回传，避免明文 API Key 进入渲染进程
     let dashscopeKey = '', imageKey = '', videoKey = '';
-    try { dashscopeKey = maskCred(await decryptSecret(cfg.dashscopeEncryptedKey, 'API Key')); } catch (_) {}
-    try { imageKey = maskCred(await decryptSecret(cfg.imageEncryptedKey, 'API Key')); } catch (_) {}
-    try { videoKey = maskCred(await decryptSecret(cfg.dashscopeVideoEncryptedKey, 'API Key')); } catch (_) {}
-    // 保存路径统一使用 imageSavePath（图片/视频/TTS 三模块共用）
+    try { dashscopeKey = maskCred(await decryptSecret(cfg.dashscopeEncryptedKey, 'API Key')); } catch (e) { console.warn('解密DashScope密钥失败:', e.message); }
+    try { imageKey = maskCred(await decryptSecret(cfg.imageEncryptedKey, 'API Key')); } catch (e) { console.warn('解密图片密钥失败:', e.message); }
+    try { videoKey = maskCred(await decryptSecret(cfg.dashscopeVideoEncryptedKey, 'API Key')); } catch (e) { console.warn('解密视频密钥失败:', e.message); }
+    // 保存路径统一使用 imageSavePath（图片/视频共用）
     // fallback 到 dashscopeSavePath 仅为兼容老版本配置数据
     const unifiedSavePath = cfg.imageSavePath || cfg.dashscopeSavePath || '';
     if (provider === 'dashscope') {
@@ -3083,17 +3100,15 @@ ipcMain.handle('ai:load-image-config', async () => {
     };
 });
 
-/* ==================== TTS 语音配置存取 ====================
+/* ==================== 图片/视频配置存取 ====================
  * 严格复用 encryptSecret / maskCred / isMaskedCred 三件套，
  * 与图片/视频配置存取模式完全一致：掩码占位时保留旧密钥，避免掩码字符串被当真实密钥加密落盘。
- * 三级 Key fallback：ttsEncryptedKey → dashscopeEncryptedKey → encryptedKey(聊天)
- *   老配置（已有图片或聊天百炼 Key）零改动即可使用 TTS，无需重复填写。
  * ================================================================== */
 
 // 自动保存图片到磁盘
 function saveImageToDisk(dataUrl, cfg) {
     try {
-        // 保存路径统一使用 imageSavePath（图片/视频/TTS 三模块共用），fallback 兼容老配置
+        // 保存路径统一使用 imageSavePath（图片/视频共用），fallback 兼容老配置
         const saveDir = (cfg && (cfg.imageSavePath || cfg.dashscopeSavePath)) || app.getPath('userData');
         if (!fs.existsSync(saveDir)) { fs.mkdirSync(saveDir, { recursive: true }); }
         const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
@@ -3112,6 +3127,11 @@ function saveImageToDisk(dataUrl, cfg) {
 // 注意：本函数不包含 SSRF 校验（错误消息因调用点不同而异），调用方需在调用前自行校验 URL
 async function fetchImageAsDataUrl(url, cfg) {
     const imgResp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    // 修复：原实现未校验 resp.ok，错误响应（403/404/500 等）的 HTML/JSON
+    // 会被 Base64 编码后当成图片数据返回，产生损坏的 dataUrl 并可能泄露错误页内部信息
+    if (!imgResp.ok) {
+        throw new Error('图片下载失败 HTTP ' + imgResp.status + ': ' + imgResp.statusText);
+    }
     const imgBuf = await imgResp.arrayBuffer();
     const dataUrl = 'data:image/png;base64,' + Buffer.from(imgBuf).toString('base64');
     saveImageToDisk(dataUrl, cfg);
@@ -3229,8 +3249,10 @@ async function dashscopeGenerate(baseUrl, apiKey, model, prompt, size, imageData
 
 /**
  * 下载视频 URL 并保存到本地磁盘，返回本地文件路径。
- * 保存目录统一使用 imageSavePath（图片/视频/TTS 三模块共用同一保存路径）
+ * 保存目录统一使用 imageSavePath（图片/视频共用同一保存路径）
  * fallback 到 dashscopeSavePath 仅为兼容老版本配置数据
+ * 流式下载核心逻辑提取到 main/downloadUtils.js 的 streamDownloadToFile，
+ * 该函数已通过单元测试验证（包括磁盘写入失败时正确 reject 而非挂起）。
  * @param {string} videoUrl - 视频下载地址
  * @param {object} cfg - AI 配置对象
  * @returns {Promise<string>} 本地视频文件绝对路径
@@ -3240,200 +3262,22 @@ async function saveVideoToDisk(videoUrl, cfg) {
     if (!isSafeExternalUrl(videoUrl)) {
         throw new Error('视频下载地址不安全（需 https 外网地址），已拒绝下载');
     }
-    // 保存路径统一使用 imageSavePath（与图片/TTS 共用），不再单独读取 videoSavePath
+    // 保存路径统一使用 imageSavePath，不再单独读取 videoSavePath
     const saveDir = (cfg && (cfg.imageSavePath || cfg.dashscopeSavePath)) || app.getPath('userData');
     if (!fs.existsSync(saveDir)) { fs.mkdirSync(saveDir, { recursive: true }); }
     const fileName = 'ai_video_' + Date.now() + '.mp4';
     const filePath = path.join(saveDir, fileName);
-    // 流式下载到磁盘：避免一次性把整段视频读进内存导致 OOM（几百 MB 视频会让 Node 崩溃）
-    const resp = await fetch(videoUrl, { signal: AbortSignal.timeout(120000) });
-    if (!resp.ok) {
-        throw new Error('下载视频失败 HTTP ' + resp.status + ': ' + resp.statusText);
-    }
-    if (!resp.body) {
-        // 兜底：环境不支持流式读取时退回一次性 Buffer
-        const buf = Buffer.from(await resp.arrayBuffer());
-        fs.writeFileSync(filePath, buf);
-        console.log('视频已保存:', path.basename(filePath));
-        return filePath;
-    }
-    const fileStream = fs.createWriteStream(filePath);
-    const reader = resp.body.getReader();
+    // 修复：下载失败（超时/网络中断/磁盘满）时删除残留的部分写入文件，避免磁盘累积损坏 mp4
     try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            fileStream.write(Buffer.from(value));
-        }
-    } finally {
-        fileStream.end();
-        await new Promise((resolve) => fileStream.on('finish', resolve));
+        // 流式下载到磁盘：使用经单元测试验证的 streamDownloadToFile
+        // 120 秒超时与原实现保持一致（视频文件可能较大）
+        await streamDownloadToFile(videoUrl, filePath, { timeout: 120000 });
+    } catch (err) {
+        try { await fs.promises.unlink(filePath); } catch (e) { console.warn('删除临时文件失败:', e.message); }
+        throw err;
     }
-    console.log('视频已保存到:', filePath);
+    console.log('视频已保存:', path.basename(filePath));
     return filePath;
-}
-
-/* ==================== TTS 语音合成 Service（百炼 CosyVoice）====================
- * 与图片/视频生成同构：原生 fetch + SSRF https 校验 + 错误码统一处理。
- * 合成模式：HTTP 同步合成（v1），返回音频 URL 或 base64，主进程统一落盘到 tts_cache。
- * 情感控制（Director Mode）：通过 parameters.instruct 字段实现（严格遵循官方 model+input+parameters 三层结构）。
- * 声音复刻：先上传音频到百炼临时存储拿 oss:// URL，再调注册接口拿 voice_id。
- * 严格不引入第三方 SDK，全部原生 fetch + Node 内置模块。
- * ============================================================================= */
-
-// TTS 单次合成文本长度上限（百炼单次请求限制 + IPC payload 约束）
-const TTS_TEXT_MAX_LENGTH = 1000;
-// TTS HTTP 请求超时（合成通常 3-10 秒，给 60 秒余量）
-const TTS_REQUEST_TIMEOUT_MS = 60000;
-
-/**
- * 构建百炼 TTS HTTP 请求 URL。
- * 铁血纪律：new URL().origin 只取 scheme://host[:port]，用户输入的任何 path（如 /compatible-mode/v1）统统剥离。
- * @param {string} baseUrl - 用户配置的百炼 API 地址（可能带 path）
- * @param {string} apiPath - 官方标准路径 /api/v1/services/aigc/text2audio/generation
- * @returns {string} 完整请求 URL（origin + apiPath）
- */
-function buildTtsUrl(baseUrl, apiPath) {
-    let origin = baseUrl || 'https://dashscope.aliyuncs.com';
-    try {
-        const u = new URL(origin);
-        origin = u.origin;  // 只取 scheme://host[:port]，丢弃任何 path
-    } catch (e) {
-        throw new Error('百炼 TTS API 地址格式错误：' + e.message);
-    }
-    return origin + apiPath;
-}
-
-/**
- * 阿里云百炼文本转语音（HTTP 同步合成，非实时）。
- * 官方 Endpoint: POST https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer
- * 适用于 CosyVoice 系列 + Qwen-Audio-TTS 系列（共用同一 endpoint，请求体结构相同）。
- * 请求体结构: { model, input:{ text, voice, format, sample_rate, instruction? } }
- *   —— voice/format/sample_rate 全部放在 input 内，无 parameters 对象（实测确认）
- * @param {string} baseUrl - 百炼 API 地址
- * @param {string} apiKey - 明文 API Key（由 withDecryptedKey 解密后传入）
- * @param {string} model - 模型名（cosyvoice-v1 / qwen-audio-3.0-tts-plus / qwen-audio-3.0-tts-flash 等）
- * @param {string} voice - 音色 id（必须与模型严格匹配，否则报 411 Engine error；留空则按模型自动匹配默认音色）
- * @param {string} text - 待合成文本
- * @param {string} [instruct] - 情感指令（cosyvoice 用 input.instruction；qwen-audio 不支持，自动跳过）
- * @param {string} [format='mp3'] - 输出音频格式
- * @returns {Promise<{url: string, durationMs?: number}>} ttsfile:// 本地路径
- */
-async function dashscopeTts(baseUrl, apiKey, model, voice, text, instruct, format) {
-    // 入参校验
-    if (!apiKey) throw new Error('API Key 未配置');
-    if (!text || !text.trim()) throw new Error('待合成文本不能为空');
-    if (text.length > TTS_TEXT_MAX_LENGTH) {
-        throw new Error('文本过长（超过 ' + TTS_TEXT_MAX_LENGTH + ' 字上限），请缩短后重试');
-    }
-    const useModel = model || 'cosyvoice-v1';
-    const useFormat = (format || 'mp3').toLowerCase();
-
-    // 默认音色按精确模型区分（音色与模型必须严格匹配，否则报 411 Engine error）
-    // qwen-audio-3.0-tts-plus → longanlingxin（旗舰音色）
-    // qwen-audio-3.0-tts-flash → longanhuan_v3.6（精品中文音色）
-    // cosyvoice 系列 → longxiaochun
-    // 注意：模型名匹配使用小写比较（用户可能在设置中输入不同大小写），但 useModel 原值传给 API
-    let useVoice = voice || '';
-    if (!useVoice) {
-        const modelLower = useModel.toLowerCase();
-        if (modelLower === 'qwen-audio-3.0-tts-plus') {
-            useVoice = 'longanlingxin';
-        } else if (modelLower === 'qwen-audio-3.0-tts-flash') {
-            useVoice = 'longanhuan_v3.6';
-        } else if (modelLower.indexOf('qwen-audio') === 0) {
-            // 兜底：未知 qwen-audio 变体按 flash 默认音色处理
-            useVoice = 'longanhuan_v3.6';
-        } else {
-            useVoice = 'longxiaochun';
-        }
-    }
-
-    // 官方 HTTP 端点路径（实测确认：text2audio/generation 会报 url error，SpeechSynthesizer 才是正确路径）
-    const reqUrl = buildTtsUrl(baseUrl, '/api/v1/services/audio/tts/SpeechSynthesizer');
-    // SSRF 校验：必须 https
-    try {
-        const u = new URL(reqUrl);
-        if (u.protocol !== 'https:') throw new Error('仅支持 https 协议');
-    } catch (e) {
-        throw new Error('百炼 TTS API 地址不安全：' + e.message);
-    }
-
-    // 防呆日志 —— fetch 前打印最终 URL 和模型/音色，方便排查
-    console.info('[TTS] 最终请求 URL:', reqUrl, '| model:', useModel, '| voice:', useVoice);
-
-    // 请求体：所有字段放在 input 内（实测确认无 parameters 对象）
-    const input = {
-        text: text,
-        voice: useVoice,
-        format: useFormat,
-        sample_rate: 22050
-    };
-    // 情感指令：仅 cosyvoice 系列支持 input.instruction；qwen-audio 系列不支持，跳过避免报错
-    if (instruct && instruct.trim() && useModel.indexOf('qwen-audio') !== 0) {
-        input.instruction = instruct.trim();
-    }
-    const body = { model: useModel, input: input };
-
-    const resp = await fetch(reqUrl, {
-        method: 'POST',
-        headers: {
-            'Authorization': 'Bearer ' + apiKey,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(TTS_REQUEST_TIMEOUT_MS)
-    });
-
-    if (!resp.ok) {
-        const errText = await resp.text().catch(() => '');
-        throw new Error('百炼 TTS 请求失败 HTTP ' + resp.status + ': ' + (errText || resp.statusText).slice(0, 500));
-    }
-    const data = await resp.json();
-
-    // 错误码检查（百炼同步返回的错误格式）
-    if (data.code) {
-        throw new Error('百炼 TTS 错误 [' + data.code + ']: ' + (data.message || '未知错误'));
-    }
-
-    // 解析音频：百炼返回两种格式
-    //  1) output.audio.url → 公网 URL（可能是 http://，需升级为 https:// 再过 SSRF 校验），需下载
-    //  2) output.audio → data:audio/mpeg;base64,xxx dataURL
-    let audioBuffer = null;
-    let ext = useFormat;
-
-    const audioField = data.output && data.output.audio;
-    if (typeof audioField === 'string' && audioField.startsWith('data:audio/')) {
-        // 格式 2：直接 base64 dataURL
-        const m = /^data:audio\/(\w+);base64,/.exec(audioField);
-        if (m) ext = m[1] === 'mpeg' ? 'mp3' : m[1];
-        const base64Data = audioField.replace(/^data:audio\/\w+;base64,/, '');
-        audioBuffer = Buffer.from(base64Data, 'base64');
-    } else if (audioField && typeof audioField.url === 'string') {
-        // 格式 1：公网 URL，下载（复用 SSRF 校验）
-        // 百炼 OSS 返回的 URL 可能是 http://，升级为 https:// 再校验（阿里云 OSS 支持 https）
-        let audioUrl = audioField.url;
-        if (audioUrl.indexOf('http://') === 0) audioUrl = 'https://' + audioUrl.slice(7);
-        if (!isSafeExternalUrl(audioUrl)) {
-            throw new Error('百炼返回的音频地址不安全（需 https 外网地址），已拒绝下载');
-        }
-        const dlResp = await fetch(audioUrl, { signal: AbortSignal.timeout(TTS_REQUEST_TIMEOUT_MS) });
-        if (!dlResp.ok) {
-            throw new Error('下载合成音频失败 HTTP ' + dlResp.status + ': ' + dlResp.statusText);
-        }
-        audioBuffer = Buffer.from(await dlResp.arrayBuffer());
-    } else {
-        throw new Error('百炼 TTS 未返回音频数据：' + JSON.stringify(data).slice(0, 500));
-    }
-
-    if (!audioBuffer || audioBuffer.length === 0) {
-        throw new Error('百炼 TTS 返回的音频数据为空');
-    }
-
-    // 落盘到 tts_cache，返回 ttsfile:// URL
-    const ttsUrl = await saveAudioToTtsCache(audioBuffer, ext);
-    return { url: ttsUrl, durationMs: data.output && data.output.duration_ms };
 }
 
 /**
@@ -3616,7 +3460,7 @@ async function dashscopeGenerateVideo(baseUrl, apiKey, model, prompt, size, imag
 // 中断当前视频生成轮询（用户点击取消按钮或退出软件时调用）
 ipcMain.handle('ai:abort-video', () => {
     if (videoAbortController) {
-        try { videoAbortController.abort(); } catch (_) {}
+        try { videoAbortController.abort(); } catch (e) { console.warn('中止视频请求失败:', e.message); }
         videoAbortController = null;
         return true;
     }
@@ -3634,7 +3478,7 @@ function buildOpenAiImageUrl(baseUrl, imagePath) {
         if (/\/v\d+$/.test(u.pathname)) {
             return trimmed + imagePath;  // imagePath 形如 '/images/generations'
         }
-    } catch (e) { /* URL 解析失败走下面的字符串拼接兜底 */ }
+    } catch (e) { console.warn('解析URL失败:', e.message); /* URL 解析失败走下面的字符串拼接兜底 */ }
     // 路径不含版本号 → 补 /v1（向后兼容老配置）
     return trimmed + '/v1' + imagePath;
 }
@@ -3801,7 +3645,7 @@ ipcMain.handle('ai:generate-video', async (_event, params) => {
 });
 
 /* ==================== 音乐模块 IPC Handler（V7.4 P0 骨架）====================
- * 设计与 TTS 同构：tryWrap 统一异常捕获，主进程负责文件 I/O，渲染进程零 base64 内存占用。
+ * 设计：tryWrap 统一异常捕获，主进程负责文件 I/O，渲染进程零 base64 内存占用。
  * P0 阶段实现：文件选择对话框、文件夹扫描、播放列表持久化、元数据解析骨架。
  * 元数据解析（music-metadata-browser）在 P2 阶段接入，P0 仅返回文件名与大小。
  * 安全：
@@ -3832,7 +3676,7 @@ ipcMain.handle('music:pick-files', tryWrap(async () => {
         try {
             const st = await fs.promises.stat(p);
             if (st.isFile()) files.push({ filePath: p, size: st.size });
-        } catch (_) { /* 跳过无法访问的文件 */ }
+        } catch (e) { console.warn('获取文件信息失败:', e.message); /* 跳过无法访问的文件 */ }
     }
     return { success: true, files };
 }));
@@ -3871,7 +3715,7 @@ ipcMain.handle('music:scan-folder', tryWrap(async (_event, { folderPath, recursi
                     try {
                         const st = await fs.promises.stat(fullPath);
                         if (st.isFile()) files.push({ filePath: fullPath, size: st.size });
-                    } catch (_) { /* 跳过 */ }
+                    } catch (e) { console.warn('获取文件信息失败:', e.message); }
                 }
             } else if (entry.isDirectory() && doRecursive && depth < 10) {
                 await walk(fullPath, depth + 1);
@@ -3977,7 +3821,7 @@ ipcMain.handle('music:read-metadata', tryWrap(async (_event, { filePath }) => {
 
 // 加载播放列表（启动时自动加载）
 ipcMain.handle('music:load-playlist', tryWrap(async () => {
-    const data = await loadJSON(getMusicPlaylistPath(), []);
+    const data = await loadJSONAsync(getMusicPlaylistPath(), []);
     return { success: true, playlist: Array.isArray(data) ? data : [] };
 }));
 
@@ -3996,9 +3840,9 @@ ipcMain.handle('music:save-playlist', tryWrap(async (_event, playlist) => {
  * P0 阶段实现：配置加密存储、收藏/缓存本地读写、API 调用骨架。
  * 实际 HTTP 请求在 P3 阶段接入，P0 仅返回空数组与默认配置。
  * 安全：
- *   - API 基址必须通过 validateAiBaseUrl 校验（与 TTS 同款 SSRF 防护）
+ *   - API 基址必须通过 validateAiBaseUrl 校验（SSRF 防护）
  *   - 电台流 URL 不在主进程校验（在渲染进程 <audio> 加载时由 Chromium 处理）
- *   - 配置加密存储：与 TTS 一致，避免明文落盘
+ *   - 配置加密存储：避免明文落盘
  * ======================================================================== */
 
 // RadioBrowser API 默认配置
@@ -4015,8 +3859,8 @@ const RADIO_DEFAULT_CONFIG = {
 // bycountryexact/China 与 bycountryexact/Hong%20Kong 端点实时拉取直接
 // Icecast/Shoutcast MP3/AAC 流地址（详见 radio:get-topstations）。
 
-// 加载 FM 配置（与 TTS 配置同级存储在 settings.aiConfig.radioConfig，加密字段无）
-// 注意：FM 配置不含密钥，但仍按 TTS 模式存入 aiConfig 命名空间，避免散落
+// 加载 FM 配置（存储在 settings.aiConfig.radioConfig，加密字段无）
+// 注意：FM 配置不含密钥，但仍按图片/视频模式存入 aiConfig 命名空间，避免散落
 ipcMain.handle('radio:load-config', tryWrap(async () => {
     const s = loadSettings();
     const cfg = (s.aiConfig && s.aiConfig.radioConfig) || {};
@@ -4025,7 +3869,7 @@ ipcMain.handle('radio:load-config', tryWrap(async () => {
     return { success: true, config: merged };
 }));
 
-// 保存 FM 配置（字段级合并，未传入字段保留原值，与 tts:save-config 同款逻辑）
+// 保存 FM 配置（字段级合并，未传入字段保留原值）
 ipcMain.handle('radio:save-config', tryWrap(async (_event, config) => {
     assertPayloadSize(config, MAX_IPC_PAYLOAD_SIZE, 'radio:save-config');
     const s = loadSettings();
@@ -4082,7 +3926,7 @@ ipcMain.handle('radio:save-config', tryWrap(async (_event, config) => {
 
 // ===== FM 电台 HTTP 工具与镜像选择（P3 阶段：真实接入 RadioBrowser API）=====
 // 以下三个 helper 仅服务 radio:get-servers / radio:get-topstations / radio:search
-// 不复用 TTS/AI 模块的 fetch 逻辑：RadioBrowser 要求带 User-Agent 头，且需要镜像回退
+// 不复用 AI 模块的 fetch 逻辑：RadioBrowser 要求带 User-Agent 头，且需要镜像回退
 
 /**
  * 发起 GET 请求并解析 JSON 响应。
@@ -4265,7 +4109,7 @@ ipcMain.handle('radio:get-topstations', tryWrap(async (_event, { limit } = {}) =
     // 1) 读本地缓存（try/catch 防止缓存损坏导致整体失败）
     let cached = null;
     try {
-        cached = await loadJSON(cachePath, null);
+        cached = await loadJSONAsync(cachePath, null);
     } catch (e) {
         cached = null;  // 缓存损坏不致命，忽略后走 API
     }
@@ -4403,7 +4247,7 @@ ipcMain.handle('radio:get-cnhk-music-stations', tryWrap(async (_event, { limit }
     // 1. 读本地缓存（cnhkMusic 字段独立于 topStations，避免互相污染）
     let cached = null;
     try {
-        cached = await loadJSON(cachePath, null);
+        cached = await loadJSONAsync(cachePath, null);
     } catch (e) {
         cached = null;
     }
@@ -4555,7 +4399,7 @@ ipcMain.handle('radio:search', tryWrap(async (_event, { keyword, country, tag, l
 
 // 加载收藏列表
 ipcMain.handle('radio:load-favorites', tryWrap(async () => {
-    const data = await loadJSON(getRadioFavoritesPath(), []);
+    const data = await loadJSONAsync(getRadioFavoritesPath(), []);
     return { success: true, favorites: Array.isArray(data) ? data : [] };
 }));
 
@@ -4654,7 +4498,7 @@ ipcMain.handle('logs:refresh', (_e, filter) => {
 ipcMain.handle('logs:meta', tryWrap(async () => {
     const stats = logger.getLogStats();
     let currentFile = '';
-    try { currentFile = logger.getWritableLogPath(); } catch (_) {}
+    try { currentFile = logger.getWritableLogPath(); } catch (e) { console.warn('获取日志路径失败:', e.message); }
     return {
         success: true,
         total: stats.total,
@@ -4693,17 +4537,32 @@ ipcMain.handle('logs:clear', () => {
 
 /* ==================== 应用生命周期 ==================== */
 
-app.whenReady().then(async () => {
+/* ===== 单实例锁：防止多实例并发写文件导致数据损坏 =====
+ * json-io.js 的 fileLocks 是进程内 Map，无法跨进程互斥。
+ * 多实例同时运行会导致 notes.json/settings.json 后写覆盖前写、
+ * performSync 的 isSyncing 失效，造成数据丢失或备份损坏。
+ * 第二实例启动时直接退出，并让首实例窗口前置。
+ */
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+    app.quit();
+} else {
+    app.on('second-instance', () => {
+        // 用户尝试启动第二实例：把首实例窗口前置
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.show();
+            mainWindow.focus();
+        }
+    });
+
+    app.whenReady().then(async () => {
     // 初始化日志文件（必须在 userData 目录就绪后调用）
-    try { logger.initLogFile(); } catch (_) {}
+    try { logger.initLogFile(); } catch (e) { console.warn('初始化日志文件失败:', e.message); }
 
     // 静默清理过期日志文件（7天前），异步不阻塞启动
     // 失败仅 console.error 吞掉，不影响应用启动
     try { logger.cleanOldLogs(); } catch (e) { console.error('启动清理过期日志失败:', e.message); }
-
-    // 静默清理 TTS 音频缓存（7天过期 + 100MB 上限，异步不阻塞启动）
-    // 失败仅 console.error 吞掉，不影响应用启动
-    try { cleanTtsCache(); } catch (e) { console.error('启动清理 TTS 缓存失败:', e.message); }
 
     // 一次性加载设置（含 opacity 等）
     const s = loadSettings();
@@ -4745,13 +4604,13 @@ app.whenReady().then(async () => {
      * URL 形如：
      *   musicfile://audio/<encodeURIComponent(绝对路径)>   音频文件
      *   musicfile://cover/<encodeURIComponent(绝对路径)>    封面图片
-     * 安全要点（与 ttsfile 同构 + 路径前缀白名单）：
+     * 安全要点（路径前缀白名单）：
      *   1. host 区分类型：audio / cover，其他一律 403
      *   2. 路径解码后必须为绝对路径，且扩展名必须在白名单内
      *   3. realpath 二次校验：解析符号链接后必须仍为常规文件（不做目录约束，因用户可挑任意路径）
      *   4. 文件大小限制：音频 50MB / 封面 5MB，防止超大文件撑爆渲染进程
      *   5. 异步读取，避免阻塞主进程
-     * 注意：与 ttsfile 不同，本地音乐不在固定目录内（用户挑选），不能用 startsWith(dir) 校验，
+     * 注意：本地音乐不在固定目录内（用户挑选），不能用 startsWith(dir) 校验，
      *       改用 realpath + isFile + 扩展名白名单三重校验。
      */
     protocol.handle('musicfile', async (request) => {
@@ -4817,23 +4676,29 @@ app.whenReady().then(async () => {
         if (mainWindow) { mainWindow.show(); }
         else { createWindow(); }
     });
-});
+    }).catch(e => {
+        // 修复：原 async 回调无 .catch()，启动阶段异常成为 unhandled rejection，
+        // 应用启动失败时无任何错误提示
+        console.error('应用启动失败:', e);
+        try { if (app) app.exit(1); } catch (e) { console.warn('退出应用失败:', e.message); }
+    });
+}
 
 // 退出时清理资源
 app.on('will-quit', () => {
     // 退出前最终刷盘日志（与 before-quit 互为兜底，防最后一批日志丢失）
-    try { logger.flushLogFile(); } catch (_) {}
+    try { logger.flushLogFile(); } catch (e) { console.warn('刷盘日志失败:', e.message); }
     // 退出时主动中断视频轮询，避免后台轮询继续浪费 API 配额
     try {
         if (videoAbortController) {
             videoAbortController.abort();
             videoAbortController = null;
         }
-    } catch (_) {}
+    } catch (e) { console.warn('中止视频请求失败:', e.message); }
     // 清理自动同步定时器，避免退出过程中触发无意义的同步
     try {
         if (autoSyncTimer) { clearInterval(autoSyncTimer); autoSyncTimer = null; }
-    } catch (_) {}
+    } catch (e) { console.warn('清理同步定时器失败:', e.message); }
 });
 
 app.on('window-all-closed', () => {
@@ -4852,7 +4717,7 @@ app.on('before-quit', (e) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('app-saving-before-quit');
         }
-    } catch (_) {}
+    } catch (e) { console.warn('通知主窗口退出失败:', e.message); }
 
     if (isPendingSave() && quitRetryCount < MAX_QUIT_RETRY) {
         e.preventDefault();

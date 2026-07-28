@@ -52,7 +52,7 @@
                     entries: [{ level: String(level).toUpperCase(), msg: msg.slice(0, 2000), ts: Date.now() }]
                 }).catch(() => {});  // 日志上报失败静默忽略，避免 unhandled rejection
             }
-        } catch (_) { /* 日志上报失败不影响业务 */ }
+        } catch (e) { console.warn('日志上报失败:', e.message); }
     }
     // 播放列表持久化防抖（1.5s，沿用项目约定）
     const savePlaylistDebounced = debounce(() => {
@@ -802,7 +802,7 @@
             item.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
             // 必须设置 data 才能在某些浏览器触发 dragover
-            try { e.dataTransfer.setData('text/plain', String(dragSrcIdx)); } catch (_) {}
+            try { e.dataTransfer.setData('text/plain', String(dragSrcIdx)); } catch (e2) { console.warn('设置拖拽数据失败:', e2.message); }
         });
         container.addEventListener('dragend', (e) => {
             const item = e.target.closest('.music-item');

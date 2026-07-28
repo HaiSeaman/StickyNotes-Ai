@@ -82,7 +82,7 @@ function isSafeExternalUrl(urlStr) {
 }
 
 /**
- * AI/TTS baseUrl 协议校验：拒绝 file:/data:/javascript: 等危险协议，防 SSRF 与密钥泄露。
+ * AI baseUrl 协议校验：拒绝 file:/data:/javascript: 等危险协议，防 SSRF 与密钥泄露。
  * 注：允许 http: 是为兼容用户本地部署（如 Ollama），isSafeExternalUrl 仅用于更严格的场景。
  * @param {string} baseUrl - 待校验的 baseUrl
  * @param {string} [label] - 错误消息中的标签（如 'AI API 地址'）
