@@ -1,4 +1,6 @@
 /* ==================== DOM 引用 ==================== */
+// 公共工具函数从 renderer/utils.js 引入（消除与 chatTab.js 的重复定义）
+const { pad2, formatChatTime, debounce } = window.RendererUtils;
 const $ = (id) => document.getElementById(id);
 const noteInput = $('noteInput');
 const noteList = $('noteList');
@@ -184,29 +186,7 @@ const escapeHtml = (str) => {
     return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 };
 
-// 防抖：连续触发时只执行最后一次，用于搜索框输入、滑块拖动等高频事件
-// 避免每次按键/每次像素移动都全量重建 DOM 或发起 IPC，降低 CPU 与渲染开销
-function debounce(fn, wait) {
-    let timer = null;
-    let lastArgs = [];
-    let lastThis = null;
-    const debounced = function (...args) {
-        lastArgs = args;
-        lastThis = this;
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => { timer = null; fn.apply(lastThis, lastArgs); }, wait || 200);
-    };
-    // 暴露 flush 方法，窗口关闭时强制执行最后一次回调，防数据丢失
-    // flush 缓存最后入参并回放，避免 flush() 无参时传 undefined 给主进程
-    debounced.flush = function () {
-        if (timer) {
-            clearTimeout(timer);
-            timer = null;
-            fn.apply(lastThis, lastArgs);
-        }
-    };
-    return debounced;
-}
+// debounce / pad2 / formatChatTime 已抽取至 renderer/utils.js（见文件顶部引用）
 
 /* ==================== 文件夹列表渲染泛型 ====================
  * 归档/垃圾桶（便签 & 聊天）4 个列表结构同构，统一为 renderFolderList 调用。
@@ -1884,15 +1864,7 @@ function saveChats() {
     }
 }
 
-// 聊天时间格式化：withDate=false（默认）返回 HH:MM（用于聊天消息元数据），
-// withDate=true 返回 YYYY-MM-DD HH:MM（用于归档/垃圾桶列表的时间显示）
-// 合并原 formatChatTime 与 formatChatFullTime 两个函数
-function formatChatTime(ts, withDate = false) {
-    if (!ts) return '';
-    const d = new Date(ts);
-    const hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
-    return withDate ? (d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + hm) : hm;
-}
+// formatChatTime 已抽取至 renderer/utils.js（见文件顶部引用）
 
 function getCurrentChat() {
     return aiChats.find(c => c.id === currentChatId) || null;
@@ -4695,7 +4667,7 @@ function refreshMarkdownPreviewIfActive() {
 
 /* ==================== 实时时钟 ==================== */
 const WEEKDAYS = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
-const pad2 = (n) => String(n).padStart(2, '0');
+// pad2 已抽取至 renderer/utils.js（见文件顶部引用）
 
 function updateClock() {
     const d = new Date();
