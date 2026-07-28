@@ -90,10 +90,6 @@ contextBridge.exposeInMainWorld('api', {
     saveChatImage: makeInvoke('chat:save-image'),
     deleteChatImage: makeInvoke('chat:delete-image'),
 
-    /* ===== 透明度 ===== */
-    setOpacity: makeInvoke('window:set-opacity'),
-    getOpacity: makeInvoke('window:get-opacity'),
-
     /* ===== AI 图片生成 ===== */
     saveImageConfig: makeInvoke('ai:save-image-config'),
     loadImageConfig: makeInvoke('ai:load-image-config'),

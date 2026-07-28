@@ -29,30 +29,6 @@ function registerSystemIpc(optionsOrGetMainWindow, loadSettings, persistSettings
     const load = typeof loadFn === 'function' ? loadFn : () => ({});
     const persist = typeof persistFn === 'function' ? persistFn : () => {};
 
-    // 设置窗口透明度
-    ipcMain.handle('window:set-opacity', (_event, val) => {
-        const win = getMainWindow ? getMainWindow() : null;
-        if (!win) return;
-        // 数值校验：防 NaN/字符串导致 setOpacity 行为未定义
-        if (typeof val !== 'number' || !Number.isFinite(val)) return;
-        const opacity = Math.max(0.2, Math.min(1, val));
-        if (typeof win.setOpacity === 'function') {
-            win.setOpacity(opacity);
-        }
-        const s = load();
-        if (s) {
-            s.opacity = opacity;
-        }
-        persist();
-        return opacity;
-    });
-
-    // 获取窗口透明度
-    ipcMain.handle('window:get-opacity', () => {
-        const s = load();
-        return s?.opacity ?? 1;
-    });
-
     // 选择文件夹
     ipcMain.handle('select-folder', async () => {
         const win = getMainWindow ? getMainWindow() : null;

@@ -2405,8 +2405,13 @@ ipcMain.handle('chat:export-markdown', tryWrap(async (_event, { title, content }
     if (result.canceled || !result.filePath) {
         return { success: false, canceled: true };
     }
-    fs.writeFileSync(result.filePath, content || '', 'utf8');
-    return { success: true, filePath: result.filePath };
+    // 路径规范化与合法性校验：确保导出路径为绝对路径
+    const normalizedPath = path.normalize(result.filePath);
+    if (!path.isAbsolute(normalizedPath)) {
+        return { success: false, error: '无效的文件保存路径' };
+    }
+    fs.writeFileSync(normalizedPath, content || '', 'utf8');
+    return { success: true, filePath: normalizedPath };
 }));
 
 /* ==================== 剪贴板：写入文本 ============================ */
@@ -2970,11 +2975,6 @@ ipcMain.handle('chat:abort', () => {
     return false;
 });
 
-/* ==================== AI 翻译（文本） ====================
-// 窗口透明度
-// 注册解耦路由
-registerAiIpc({ loadSettings, persistSettings, isMaskedCred, encryptSecret, validateAiBaseUrl });
-registerNotesIpc({ getNotesPath, loadJSON, saveJSON, MAX_IPC_PAYLOAD_SIZE });
 registerSystemIpc({ getMainWindow: () => mainWindow, loadSettings, persistSettings });
 
 // 保存自定义图片尺寸（自动保存，不加入推荐列表）
@@ -4459,7 +4459,7 @@ ipcMain.handle('radio:get-stations-by-source', tryWrap(async (_event, { source, 
     const s = loadSettings();
     const cfg = Object.assign({}, RADIO_DEFAULT_CONFIG, (s.aiConfig && s.aiConfig.radioConfig) || {});
     const lim = Math.max(1, Math.min(200, Number(limit) || 100));
-    const src = String(source || 'topvote').slice(0, 32);
+    const src = encodeURIComponent(String(source || 'topvote').slice(0, 32));
 
     // 根据来源构造端点路径（路径参数 vs 查询参数）
     let pathAndQuery;
@@ -4812,11 +4812,6 @@ app.whenReady().then(async () => {
     createWindow();
     createTray();
     scheduleAutoSync();  // 启动自动同步定时器
-
-    // 应用保存的透明度
-    if (s.opacity !== undefined && mainWindow) {
-        mainWindow.setOpacity(Math.max(0.2, Math.min(1, s.opacity)));
-    }
 
     app.on('activate', () => {
         if (mainWindow) { mainWindow.show(); }

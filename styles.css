@@ -757,7 +757,7 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
     transition:all 0.3s var(--ease);padding:0;
 }
 .create-upload-preview .upload-close:hover{background:var(--accent-rose);color:#fff}
-.create-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+.create-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}
 /* 图片/视频模式切换按钮组 */
 .create-mode-switch{display:flex;gap:2px;margin-right:auto}
 .create-mode-btn{

@@ -37,8 +37,6 @@ const chatAttachments = $('chatAttachments');
 const chatNewBtn = $('chatNewBtn');
 const chatDelBtn = $('chatDelBtn');
 const chatTitle = $('chatTitle');
-const settingsOpacityBtn = $('settingsOpacityBtn');  // 指向设置面板内的透明度按钮
-const opacityPanel = $('opacityPanel');
 const startupToggle = $('startupToggle');
 let startupToggleState = { open: false };
 
@@ -56,8 +54,6 @@ const setPinMessage = $('setPinMessage');
 const setPinConfirmBtn = $('setPinConfirmBtn');
 const setPinCancelBtn = $('setPinCancelBtn');
 let isLocked = false;  // 当前是否处于锁定状态
-const opacitySlider = $('opacitySlider');
-const opacityValue = $('opacityValue');
 const settingsPaletteBtn = $('settingsPaletteBtn');  // 指向设置面板内的背景色按钮
 const palettePanel = $('palettePanel');
 const paletteGrid = $('paletteGrid');
@@ -405,8 +401,6 @@ window.addEventListener('beforeunload', () => {
         todoSaveTimer = null;
         try { window.api.saveTodos(todos); } catch (_) {}
     }
-    // 3. debounce() 实例的 flush（透明度滑块等；搜索防抖不涉及持久化，无需 flush）
-    try { if (typeof debouncedSetOpacity !== 'undefined' && debouncedSetOpacity.flush) debouncedSetOpacity.flush(); } catch (_) {}
     // 4. 清理全局定时器，避免窗口关闭后仍触发回调报错
     if (clockTimerId) { clearInterval(clockTimerId); clockTimerId = null; }
     if (alarmTimerId) { clearInterval(alarmTimerId); alarmTimerId = null; }
@@ -2902,25 +2896,6 @@ settingsAiBtn.addEventListener('click', async () => {
     await loadAllAiConfigsToForm();
 });
 
-/* ==================== 透明度弹出面板 ==================== */
-settingsOpacityBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeAllPanels();
-    opacityPanel.classList.add('open');
-    positionPanel(settingsBtn, opacityPanel);
-    const val = parseInt(opacitySlider.value, 10);
-    opacityValue.textContent = val + '%';
-});
-
-// 防抖 IPC：拖动滑块会高频触发 input 事件，合并为停顿 80ms 后单次 setOpacity 调用
-// 避免每像素移动都发起一次跨进程 IPC，降低主进程消息队列压力
-const debouncedSetOpacity = debounce((v) => { window.api.setOpacity(v); }, 80);
-opacitySlider.addEventListener('input', function() {
-    const val = parseInt(this.value, 10);
-    opacityValue.textContent = val + '%';
-    debouncedSetOpacity(val / 100);
-});
-
 /* ==================== 闹钟音量弹出面板（仿透明度面板） ====================
  * 滑块范围 0-300%，>100% 时 GainNode 强行放大音量（最大 3 倍）
  * 拖动实时生效，松开后持久化到 settings.json
@@ -3489,7 +3464,6 @@ if (fmResetBtn) {
 /* ==================== 关闭所有弹出面板 ==================== */
 function closeAllPanels() {
     settingsPanel.classList.remove('open');
-    opacityPanel.classList.remove('open');
     palettePanel.classList.remove('open');
     fontSetPanel.classList.remove('open');
     if (alarmVolumePanel) alarmVolumePanel.classList.remove('open');
@@ -3502,9 +3476,6 @@ document.addEventListener('click', (e) => {
     // 点击设置按钮本身由其自身事件处理
     if (e.target !== settingsBtn && !settingsPanel.contains(e.target)) {
         settingsPanel.classList.remove('open');
-    }
-    if (!opacityPanel.contains(e.target) && e.target !== settingsOpacityBtn) {
-        opacityPanel.classList.remove('open');
     }
     if (palettePanel && !palettePanel.contains(e.target) && e.target !== settingsPaletteBtn) {
         palettePanel.classList.remove('open');
@@ -5087,14 +5058,16 @@ function renderAlarmList() {
         // 铃声名称映射
         const soundNames = { default: '默认叮咚', apple: '苹果风格', android: '安卓风格', nokia: '诺基亚经典', crystal: '清脆铃声', bird: '鸟鸣', electronic: '电子闹钟' };
         const soundName = escapeHtml(soundNames[a.sound] || '默认叮咚');
-        // 文字说明
+        // 文字说明与备注安全转义防护
         const labelHtml = a.label ? `<span style="color:var(--text-2)"> · ${escapeHtml(a.label)}</span>` : '';
+        const noteHtml = a.note ? `<div style="font-size:12px;color:var(--text-3)">${escapeHtml(a.note)}</div>` : '';
         div.innerHTML = `
             <div class="alarm-item-left">
                 <button class="alarm-item-toggle ${a.enabled ? 'on' : ''}" data-action="toggle"></button>
                 <div>
                     <div class="alarm-item-time">${pad2(a.h)}:${pad2(a.m)}:${pad2(a.s)}${labelHtml}</div>
                     <div class="alarm-item-info">${info} · 🔔 ${soundName}</div>
+                    ${noteHtml}
                 </div>
             </div>
             <button class="alarm-item-delete" data-action="delete" title="删除">✕</button>
@@ -5269,13 +5242,6 @@ async function initAppSettings() {
     applyDetailFontSize(detailFontSize);
     if (fontSizeSlider) fontSizeSlider.value = detailFontSize;
     if (fontSizeValue) fontSizeValue.textContent = detailFontSize + 'px';
-
-    try {
-        const savedOp = await window.api.getOpacity();
-        const pct = Math.round((savedOp || 1) * 100);
-        opacitySlider.value = pct;
-        opacityValue.textContent = pct + '%';
-    } catch (_) { /* ignore */ }
 
     try {
         const savedSize = await window.api.loadCustomSize();

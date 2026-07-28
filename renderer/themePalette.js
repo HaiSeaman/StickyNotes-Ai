@@ -1,5 +1,5 @@
 /**
- * 便签主题颜色与毛玻璃透明度面板控制
+ * 便签主题颜色面板控制
  */
 const PALETTE_COLORS = [
     { bg: '#FFF9C4', name: '经典黄' },
@@ -10,12 +10,6 @@ const PALETTE_COLORS = [
     { bg: '#2D3748', name: '深邃夜' }
 ];
 
-function applyOpacity(winEl, opacity) {
-    if (!winEl) return;
-    const val = parseFloat(opacity) || 1.0;
-    winEl.style.opacity = val;
-}
-
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { PALETTE_COLORS, applyOpacity };
+    module.exports = { PALETTE_COLORS };
 }

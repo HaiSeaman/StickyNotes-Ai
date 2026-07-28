@@ -37,11 +37,6 @@
                     <span>AI 设置</span>
                     <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
                 </button>
-                <button class="settings-item" id="settingsOpacityBtn">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
-                    <span>透明度</span>
-                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
-                </button>
                 <button class="settings-item" id="settingsAlarmVolumeBtn">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                     <span>闹钟音量</span>
@@ -72,14 +67,6 @@
                     <span>FM 收音机</span>
                     <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
                 </button>
-            </div>
-        </div>
-        <!-- 透明度三级面板 -->
-        <div class="popup-panel opacity-panel" id="opacityPanel">
-            <div class="op-label">窗口透明度</div>
-            <div class="op-row">
-                <input type="range" id="opacitySlider" min="20" max="100" value="100" aria-label="窗口透明度">
-                <span class="op-value" id="opacityValue">100%</span>
             </div>
         </div>
         <!-- 闹钟音量三级面板（仿透明度面板风格，支持 0-300% 增益放大） -->
