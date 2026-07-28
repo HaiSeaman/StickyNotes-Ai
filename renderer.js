@@ -5339,9 +5339,14 @@ function initAlarmsAndClock() {
 
 (async function init() {
     try {
-        await initAppSettings();
-        await initWindowProps();
-        await initNoteUI();
+        // 阶段1：并行 - 应用设置（含加载 notes 数据）+ 窗口属性（pin/fixed 状态）
+        // 两者无共享依赖，并行可省一次 IPC 串行往返
+        await Promise.all([
+            initAppSettings(),
+            initWindowProps()
+        ]);
+        // 阶段2：依赖阶段1 - 便签 UI 需要 notes 数组；聊天和闹钟与便签 UI 无依赖，可并行触发
+        initNoteUI();
         initChatAndAi();
         initAlarmsAndClock();
     } catch (err) {

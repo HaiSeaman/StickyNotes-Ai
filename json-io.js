@@ -12,6 +12,9 @@ const fileLocks = new Map();
  * 同步读取 JSON 文件。
  * - 文件不存在（ENOENT）：返回 fallback，不报错
  * - 解析失败（损坏）：自动备份为 .corrupt-<ts> 文件后返回 fallback
+ *
+ * 仅用于启动时同步初始化（如 settingsCache、activityCache）。
+ * IPC handler 等异步场景应使用 loadJSONAsync，避免阻塞主进程事件循环。
  * @param {string} filePath - JSON 文件绝对路径
  * @param {*} fallback - 文件不存在或解析失败时的返回值
  * @returns {*} 解析后的对象或 fallback
@@ -27,6 +30,36 @@ function loadJSON(filePath, fallback) {
         try {
             const backupPath = filePath + '.corrupt-' + Date.now();
             fs.copyFileSync(filePath, backupPath);
+            console.error('已备份损坏文件到:', backupPath);
+        } catch (_) { /* 忽略备份失败 */ }
+        return fallback;
+    }
+}
+
+/**
+ * 异步读取 JSON 文件（非阻塞，IPC handler 应优先使用此版本）。
+ * 行为与 loadJSON 完全一致：ENOENT 返回 fallback，损坏文件自动备份。
+ * @param {string} filePath - JSON 文件绝对路径
+ * @param {*} fallback - 文件不存在或解析失败时的返回值
+ * @returns {Promise<*>} 解析后的对象或 fallback
+ */
+async function loadJSONAsync(filePath, fallback) {
+    let raw;
+    try {
+        raw = await fs.promises.readFile(filePath, 'utf-8');
+    } catch (err) {
+        if (err.code === 'ENOENT') return fallback;
+        console.error('读 JSON 失败:', err.message);
+        return fallback;
+    }
+    try {
+        return JSON.parse(raw);
+    } catch (parseErr) {
+        // 文件存在但解析失败（损坏）：异步备份后返回 fallback
+        console.error('解析 JSON 失败:', parseErr.message);
+        try {
+            const backupPath = filePath + '.corrupt-' + Date.now();
+            await fs.promises.copyFile(filePath, backupPath);
             console.error('已备份损坏文件到:', backupPath);
         } catch (_) { /* 忽略备份失败 */ }
         return fallback;
@@ -137,4 +170,4 @@ function saveJSONSync(filePath, data) {
     } catch (err) { console.error('saveJSONSync 写入失败:', err.message); return false; }
 }
 
-module.exports = { loadJSON, saveJSON, saveJSONSync };
+module.exports = { loadJSON, loadJSONAsync, saveJSON, saveJSONSync };

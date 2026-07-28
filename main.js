@@ -48,7 +48,7 @@ const {
 } = require('./security');
 
 // JSON 文件原子读写（loadJSON / saveJSON / saveJSONSync）：损坏自动备份 + Windows EPERM 重试
-const { loadJSON, saveJSON, saveJSONSync } = require('./json-io');
+const { loadJSON, loadJSONAsync, saveJSON, saveJSONSync } = require('./json-io');
 const { trimTrailingSlash } = require('./shared-utils');
 
 // 路由解耦模块导入
@@ -994,6 +994,8 @@ app.on('before-quit', () => {
     try { closeAllPopouts(todoPopoutWindows); } catch (_) {}
     // 刷盘活跃度防抖计数，避免退出时丢失最近 1.5s 内的操作
     try { flushActivity(); } catch (_) {}
+    // 退出前同步刷盘所有未落盘的历史快照，防数据丢失
+    try { flushAllNoteHistorySync(); } catch (_) {}
     // 退出前刷盘日志，防最后一批日志丢失（与 will-quit 互为兜底）
     try { logger.flushLogFile(); } catch (_) {}
 });
@@ -1025,7 +1027,7 @@ function createTray() {
 /* ==================== IPC 处理器 ==================== */
 
 // 便签数据
-ipcMain.handle('notes:load', () => loadJSON(getNotesPath(), []));
+ipcMain.handle('notes:load', () => loadJSONAsync(getNotesPath(), []));
 // 标记写盘是否进行中：退出时若仍在写，延迟退出以免数据丢失
 // 使用计数器而非布尔值，支持多个 IPC 通道并发保存（如 notes:save 与 calendar:save 交错）
 let pendingSaveCount = 0;
@@ -1065,24 +1067,24 @@ function tryWrap(fn) {
 ipcMain.handle('notes:save', wrapSaveHandler(getNotesPath, '便签数据'));
 
 // 归档便签数据（独立的 notes_archived.json，结构与 notes.json 相同）
-ipcMain.handle('notes:load-archived', () => loadJSON(getArchivedNotesPath(), []));
+ipcMain.handle('notes:load-archived', () => loadJSONAsync(getArchivedNotesPath(), []));
 ipcMain.handle('notes:save-archived', wrapSaveHandler(getArchivedNotesPath, '归档便签数据'));
 
 // 垃圾桶便签数据（独立的 notes_trashed.json，结构相同，含 trashedAt 字段）
-ipcMain.handle('notes:load-trashed', () => loadJSON(getTrashedNotesPath(), []));
+ipcMain.handle('notes:load-trashed', () => loadJSONAsync(getTrashedNotesPath(), []));
 ipcMain.handle('notes:save-trashed', wrapSaveHandler(getTrashedNotesPath, '回收站便签数据'));
 
 // 聊天归档数据（独立的 chats_archived.json，结构与 aiChats 一致，含 archivedAt 字段）
-ipcMain.handle('chat:load-archived', () => loadJSON(getArchivedChatsPath(), []));
+ipcMain.handle('chat:load-archived', () => loadJSONAsync(getArchivedChatsPath(), []));
 ipcMain.handle('chat:save-archived', wrapSaveHandler(getArchivedChatsPath, '归档聊天数据'));
 
 // 聊天垃圾桶数据（独立的 chats_trashed.json，结构相同，含 trashedAt 字段）
-ipcMain.handle('chat:load-trashed', () => loadJSON(getTrashedChatsPath(), []));
+ipcMain.handle('chat:load-trashed', () => loadJSONAsync(getTrashedChatsPath(), []));
 ipcMain.handle('chat:save-trashed', wrapSaveHandler(getTrashedChatsPath, '回收站聊天数据'));
 
 // 日历数据：日期↔闹钟映射，存入 calendar.json
 // 结构：{ "2026-07-16": { alarms: [{h,m,s,label,sound,enabled}] } }
-ipcMain.handle('calendar:load', () => loadJSON(getCalendarPath(), {}));
+ipcMain.handle('calendar:load', () => loadJSONAsync(getCalendarPath(), {}));
 ipcMain.handle('calendar:save', wrapSaveHandler(getCalendarPath, '日历数据'));
 
 /* ==================== 活跃度数据（热力图数据源） ====================
@@ -2434,31 +2436,83 @@ function getHistoryFilePath(noteId) {
 }
 
 /**
- * 读取某条便签的历史快照列表
+ * 便签历史快照内存缓存：避免每次 snapshot/toggle-lock 都同步读写磁盘。
+ * - 读：先查缓存，miss 时从磁盘加载
+ * - 写：更新缓存 + 标记 dirty + 异步落盘（不阻塞 IPC 返回）
+ * - 退出：before-quit 时同步 flush 所有 dirty 项，防数据丢失
+ */
+const noteHistoryCache = new Map();   // noteId -> history array
+const noteHistoryDirty = new Set();   // 待落盘的 noteId 集合
+
+/**
+ * 读取某条便签的历史快照列表（优先走缓存）
  * @param {string|number} noteId
  * @returns {Array<{ts:number, content:string, locked?:boolean}>}
  */
 function readNoteHistory(noteId) {
+    if (noteHistoryCache.has(noteId)) {
+        return noteHistoryCache.get(noteId);
+    }
     try {
         const fp = getHistoryFilePath(noteId);
-        if (!fs.existsSync(fp)) return [];
+        if (!fs.existsSync(fp)) {
+            noteHistoryCache.set(noteId, []);
+            return [];
+        }
         const data = JSON.parse(fs.readFileSync(fp, 'utf8'));
-        if (!Array.isArray(data)) return [];
-        return data;
+        const arr = Array.isArray(data) ? data : [];
+        noteHistoryCache.set(noteId, arr);
+        return arr;
     } catch (_) {
+        noteHistoryCache.set(noteId, []);
         return [];
     }
 }
 
 /**
- * 写入某条便签的历史快照列表
+ * 写入某条便签的历史快照列表（更新缓存 + 异步落盘）
  */
 function writeNoteHistory(noteId, history) {
+    noteHistoryCache.set(noteId, history);
+    noteHistoryDirty.add(noteId);
+    // 异步落盘，不阻塞当前 IPC 返回
+    flushNoteHistoryAsync(noteId).catch(e => {
+        console.error('异步写入历史快照失败:', e.message);
+    });
+}
+
+/**
+ * 异步落盘单个便签的历史快照
+ */
+async function flushNoteHistoryAsync(noteId) {
+    if (!noteHistoryCache.has(noteId)) return;
+    const history = noteHistoryCache.get(noteId);
     try {
         ensureHistoryDir();
         const fp = getHistoryFilePath(noteId);
-        fs.writeFileSync(fp, JSON.stringify(history), 'utf8');
-    } catch (_) {}
+        await fs.promises.writeFile(fp, JSON.stringify(history), 'utf8');
+        noteHistoryDirty.delete(noteId);
+    } catch (e) {
+        console.error('写入历史快照失败:', e.message);
+    }
+}
+
+/**
+ * 同步刷盘所有 dirty 历史快照（仅用于退出场景）
+ */
+function flushAllNoteHistorySync() {
+    for (const noteId of noteHistoryDirty) {
+        try {
+            if (!noteHistoryCache.has(noteId)) continue;
+            const history = noteHistoryCache.get(noteId);
+            ensureHistoryDir();
+            const fp = getHistoryFilePath(noteId);
+            fs.writeFileSync(fp, JSON.stringify(history), 'utf8');
+        } catch (e) {
+            console.error('退出刷盘历史快照失败:', e.message);
+        }
+    }
+    noteHistoryDirty.clear();
 }
 
 // 渲染进程调用：保存便签时顺便生成快照（满足时间间隔条件才生成）
@@ -2505,6 +2559,9 @@ ipcMain.handle('note-history:list', (_event, noteId) => {
 // 删除某条便签的所有历史快照（便签被删除时调用）
 ipcMain.handle('note-history:clear', (_event, noteId) => {
     try {
+        // 同步清缓存 + 标记不再 dirty
+        noteHistoryCache.delete(noteId);
+        noteHistoryDirty.delete(noteId);
         const fp = getHistoryFilePath(noteId);
         if (fs.existsSync(fp)) fs.unlinkSync(fp);
         return true;
@@ -3763,7 +3820,7 @@ ipcMain.handle('music:read-metadata', tryWrap(async (_event, { filePath }) => {
 
 // 加载播放列表（启动时自动加载）
 ipcMain.handle('music:load-playlist', tryWrap(async () => {
-    const data = await loadJSON(getMusicPlaylistPath(), []);
+    const data = await loadJSONAsync(getMusicPlaylistPath(), []);
     return { success: true, playlist: Array.isArray(data) ? data : [] };
 }));
 
@@ -4051,7 +4108,7 @@ ipcMain.handle('radio:get-topstations', tryWrap(async (_event, { limit } = {}) =
     // 1) 读本地缓存（try/catch 防止缓存损坏导致整体失败）
     let cached = null;
     try {
-        cached = await loadJSON(cachePath, null);
+        cached = await loadJSONAsync(cachePath, null);
     } catch (e) {
         cached = null;  // 缓存损坏不致命，忽略后走 API
     }
@@ -4189,7 +4246,7 @@ ipcMain.handle('radio:get-cnhk-music-stations', tryWrap(async (_event, { limit }
     // 1. 读本地缓存（cnhkMusic 字段独立于 topStations，避免互相污染）
     let cached = null;
     try {
-        cached = await loadJSON(cachePath, null);
+        cached = await loadJSONAsync(cachePath, null);
     } catch (e) {
         cached = null;
     }
@@ -4341,7 +4398,7 @@ ipcMain.handle('radio:search', tryWrap(async (_event, { keyword, country, tag, l
 
 // 加载收藏列表
 ipcMain.handle('radio:load-favorites', tryWrap(async () => {
-    const data = await loadJSON(getRadioFavoritesPath(), []);
+    const data = await loadJSONAsync(getRadioFavoritesPath(), []);
     return { success: true, favorites: Array.isArray(data) ? data : [] };
 }));
 
