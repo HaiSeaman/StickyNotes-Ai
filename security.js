@@ -35,6 +35,37 @@ function assertPayloadSize(value, maxLen, label) {
 }
 
 /**
+ * 校验 host 是否为内网/环回/链路本地地址
+ */
+function isPrivateOrLoopbackHost(host) {
+    if (!host) return true;
+    let cleanHost = host.toLowerCase().trim();
+    if (cleanHost.startsWith('[') && cleanHost.endsWith(']')) {
+        cleanHost = cleanHost.slice(1, -1);
+    }
+    // IPv6 映射的 IPv4 地址，例如 ::ffff:127.0.0.1
+    if (cleanHost.startsWith('::ffff:')) {
+        cleanHost = cleanHost.replace('::ffff:', '');
+    }
+    // 拒绝环回与常见未指定地址
+    if (cleanHost === 'localhost' || cleanHost === '0.0.0.0' || cleanHost === '0' || cleanHost.endsWith('.local') || cleanHost.endsWith('.internal')) {
+        return true;
+    }
+    // IPv6 环回、链路本地、私网段
+    if (cleanHost === '::' || cleanHost === '::1' || cleanHost.startsWith('fe80:') || cleanHost.startsWith('fc') || cleanHost.startsWith('fd')) {
+        return true;
+    }
+    // IPv4 环回与私网段
+    if (/^0\./.test(cleanHost) || /^127\./.test(cleanHost) || /^10\./.test(cleanHost) || /^169\.254\./.test(cleanHost) || /^192\.168\./.test(cleanHost)) {
+        return true;
+    }
+    if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(cleanHost)) {
+        return true;
+    }
+    return false;
+}
+
+/**
  * SSRF 防护：校验 URL 是否为允许的外网 HTTPS 地址。
  * - 拒绝 file:/data:/http:（仅允许 https:）
  * - 拒绝私网/环回/链路本地/元数据地址
@@ -47,22 +78,11 @@ function isSafeExternalUrl(urlStr) {
     try { u = new URL(urlStr); } catch (_) { return false; }
     // 仅允许 https 协议，杜绝 file://、http:// 内网访问
     if (u.protocol !== 'https:') return false;
-    const host = u.hostname.toLowerCase();
-    // 拒绝环回地址
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return false;
-    // 拒绝链路本地（云元数据接口 169.254.169.254 等）
-    if (host.startsWith('169.254.')) return false;
-    // 拒绝私网段（10.x、172.16-31.x、192.168.x）
-    if (/^10\./.test(host)) return false;
-    if (/^192\.168\./.test(host)) return false;
-    if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)) return false;
-    // 拒绝 IPv6 私网/本地
-    if (host.startsWith('fc') || host.startsWith('fd') || host === '[fc00::]' ) return false;
-    return true;
+    return !isPrivateOrLoopbackHost(u.hostname);
 }
 
 /**
- * AI/TTS baseUrl 协议校验：拒绝 file:/data:/javascript: 等危险协议，防 SSRF 与密钥泄露。
+ * AI baseUrl 协议校验：拒绝 file:/data:/javascript: 等危险协议，防 SSRF 与密钥泄露。
  * 注：允许 http: 是为兼容用户本地部署（如 Ollama），isSafeExternalUrl 仅用于更严格的场景。
  * @param {string} baseUrl - 待校验的 baseUrl
  * @param {string} [label] - 错误消息中的标签（如 'AI API 地址'）
@@ -91,14 +111,7 @@ function isSafePublicStreamUrl(urlStr) {
     let u;
     try { u = new URL(urlStr); } catch (_) { return false; }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-    const host = u.hostname.toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') return false;
-    if (host.startsWith('169.254.')) return false;
-    if (/^10\./.test(host)) return false;
-    if (/^192\.168\./.test(host)) return false;
-    if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)) return false;
-    if (host.startsWith('fc') || host.startsWith('fd') || host === '[fc00::]') return false;
-    return true;
+    return !isPrivateOrLoopbackHost(u.hostname);
 }
 
 /**

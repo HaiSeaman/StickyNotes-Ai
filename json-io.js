@@ -4,6 +4,9 @@
  * console 调用会被 logger.js 劫持旁路记录，无需额外处理。
  * =============================================== */
 const fs = require('fs');
+const crypto = require('crypto');
+
+const fileLocks = new Map();
 
 /**
  * 同步读取 JSON 文件。
@@ -31,46 +34,78 @@ function loadJSON(filePath, fallback) {
 }
 
 /**
- * 异步保存 JSON 文件（原子写入 + Windows EPERM 重试 + 跨卷降级）。
- * - writeFile 与重试等待均走事件循环，不阻塞主进程（IPC/闹钟/定时器正常响应）
- * - 原子写入：先写 .tmp 临时文件再 rename，避免写到一半崩溃导致数据损坏
- * - Windows 上 rename 可能因杀软扫描/OneDrive 同步/文件索引占用而抛 EPERM
- *   重试 3 次（间隔 50ms / 150ms / 250ms 递增），仍失败则降级为 copy+unlink（跨分区兼容）
- * @param {string} filePath - 目标 JSON 文件绝对路径
- * @param {*} data - 待序列化的对象
- * @returns {Promise<boolean>} 是否写入成功
+ * 异步保存 JSON 文件（支持写合并，高频写入时自动折叠只落盘最新数据 + 原子写入 + Windows EPERM 重试）。
  */
 async function saveJSON(filePath, data) {
+    let task = fileLocks.get(filePath);
+    if (!task) {
+        task = {
+            isWriting: false,
+            pendingData: null,
+            currentPromise: Promise.resolve()
+        };
+        fileLocks.set(filePath, task);
+    }
+
+    // 记录最新待写入数据
+    task.pendingData = data;
+
+    if (task.isWriting) {
+        return task.currentPromise;
+    }
+
+    task.isWriting = true;
+    task.currentPromise = (async () => {
+        let lastResult = false;
+        while (task.pendingData !== null) {
+            const dataToSave = task.pendingData;
+            task.pendingData = null; // 消费待写入数据
+            lastResult = await doSaveJSON(filePath, dataToSave);
+        }
+        task.isWriting = false;
+        return lastResult;
+    })();
+
+    return task.currentPromise;
+}
+
+async function doSaveJSON(filePath, data) {
+    let tmp = null;
     try {
-        const tmp = filePath + '.tmp';
+        const uniqueId = process.pid + '-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+        tmp = filePath + '.' + uniqueId + '.tmp';
         await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');
         let lastErr = null;
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
-                fs.renameSync(tmp, filePath);  // rename 是元数据操作，本身不阻塞
+                fs.renameSync(tmp, filePath);
                 return true;
             } catch (e) {
                 lastErr = e;
                 if (e.code !== 'EPERM' && e.code !== 'EACCES' && e.code !== 'EBUSY') {
-                    // 非权限/占用类错误，不重试
                     break;
                 }
-                // 异步等待后重试（50ms / 150ms / 250ms），不阻塞事件循环
                 const wait = 50 * (attempt + 1);
                 await new Promise(r => setTimeout(r, wait));
             }
         }
-        // 降级：copy + unlink（rename 在跨卷/占用时失败时的兜底）
+        // 降级：copy + unlink
         try {
             fs.copyFileSync(tmp, filePath);
             try { fs.unlinkSync(tmp); } catch (_) {}
             return true;
         } catch (e2) {
             console.error('写 JSON 失败（rename 重试与降级均失败）:', e2.message, '原始错误:', lastErr && lastErr.message);
-            try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {}
             return false;
         }
-    } catch (err) { console.error('写 JSON 失败:', err.message); return false; }
+    } catch (err) {
+        console.error('写 JSON 失败:', err.message);
+        return false;
+    } finally {
+        if (tmp && fs.existsSync(tmp)) {
+            try { fs.unlinkSync(tmp); } catch (_) {}
+        }
+    }
 }
 
 /**
@@ -81,7 +116,8 @@ async function saveJSON(filePath, data) {
  */
 function saveJSONSync(filePath, data) {
     try {
-        const tmp = filePath + '.tmp';
+        const uniqueId = process.pid + '-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+        const tmp = filePath + '.' + uniqueId + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
         try {
             fs.renameSync(tmp, filePath);

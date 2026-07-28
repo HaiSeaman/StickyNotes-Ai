@@ -37,14 +37,6 @@ const chatAttachments = $('chatAttachments');
 const chatNewBtn = $('chatNewBtn');
 const chatDelBtn = $('chatDelBtn');
 const chatTitle = $('chatTitle');
-const settingsOpacityBtn = $('settingsOpacityBtn');  // 指向设置面板内的透明度按钮
-const opacityPanel = $('opacityPanel');
-const settingsAlarmVolumeBtn = $('settingsAlarmVolumeBtn');
-const alarmVolumePanel = $('alarmVolumePanel');
-const alarmVolumeSlider = $('alarmVolumeSlider');
-const alarmVolumeValue = $('alarmVolumeValue');
-const settingsStartupBtn = $('settingsStartupBtn');
-const startupPanel = $('startupPanel');
 const startupToggle = $('startupToggle');
 let startupToggleState = { open: false };
 
@@ -62,8 +54,6 @@ const setPinMessage = $('setPinMessage');
 const setPinConfirmBtn = $('setPinConfirmBtn');
 const setPinCancelBtn = $('setPinCancelBtn');
 let isLocked = false;  // 当前是否处于锁定状态
-const opacitySlider = $('opacitySlider');
-const opacityValue = $('opacityValue');
 const settingsPaletteBtn = $('settingsPaletteBtn');  // 指向设置面板内的背景色按钮
 const palettePanel = $('palettePanel');
 const paletteGrid = $('paletteGrid');
@@ -84,24 +74,6 @@ const imgBaseUrl = $('imgBaseUrl');
 const imgApiKey = $('imgApiKey');
 const imgModel = $('imgModel');
 const imgSaveBtn = $('imgSaveBtn');
-// TTS 语音工坊：设置面板配置输入框
-const ttsBaseUrl = $('ttsBaseUrl');
-const ttsApiKey = $('ttsApiKey');
-const ttsModel = $('ttsModel');
-const ttsConfigSaveBtn = $('ttsConfigSaveBtn');
-// TTS 语音工坊：TAB 页 DOM 引用
-const ttsText = $('ttsText');
-const ttsTextCounter = $('ttsTextCounter');
-const ttsVoiceSelect = $('ttsVoiceSelect');
-const ttsFormatSelect = $('ttsFormatSelect');
-const ttsInstruct = $('ttsInstruct');
-const ttsGenBtn = $('ttsGenBtn');
-const ttsStatus = $('ttsStatus');
-const ttsPlayerWrap = $('ttsPlayerWrap');
-const ttsAudio = $('ttsAudio');
-const ttsDownloadBtn = $('ttsDownloadBtn');
-const ttsCleanupBtn = $('ttsCleanupBtn');
-const ttsModelSelect = $('ttsModelSelect');  // 模型快选器（TTS 页内快速切换模型）
 const createSize = $('createSize');
 const uploadFilename = $('uploadFilename');
 const uploadClose = $('uploadClose');
@@ -121,16 +93,7 @@ let createMode = 'image';  // 'image' 或 'video'
 const browsePathBtn = $('browsePathBtn');
 const imgSavePath = $('imgSavePath');
 
-/* ==================== 翻译页 DOM ==================== */
-const translateSource = $('translateSource');
-const translateResult = $('translateResult');
-const translateBtn = $('translateBtn');
-const translateClearBtn = $('translateClearBtn');
-const translateCopyBtn = $('translateCopyBtn');
-const translateLangSelect = $('translateLangSelect');
-const translateUploadBtn = $('translateUploadBtn');
-const translateFileInput = $('translateFileInput');
-const translateAttachments = $('translateAttachments');
+
 
 /* ==================== Markdown 预览 DOM ==================== */
 const mdToggleBtn = $('mdToggleBtn');
@@ -433,17 +396,31 @@ window.addEventListener('beforeunload', () => {
         try { window.api.saveNotes(notes); } catch (_) {}
     }
     // 待办小窗口独立计时器也需在退出时 flush，防 todo 数据丢失
-    if (todoSaveTimer && contentDirty) {
+    if (todoSaveTimer) {
         clearTimeout(todoSaveTimer);
         todoSaveTimer = null;
-        try { window.api.saveNotes(notes); } catch (_) {}
+        try { window.api.saveTodos(todos); } catch (_) {}
     }
-    // 3. debounce() 实例的 flush（透明度滑块等；搜索防抖不涉及持久化，无需 flush）
-    try { if (typeof debouncedSetOpacity !== 'undefined' && debouncedSetOpacity.flush) debouncedSetOpacity.flush(); } catch (_) {}
     // 4. 清理全局定时器，避免窗口关闭后仍触发回调报错
     if (clockTimerId) { clearInterval(clockTimerId); clockTimerId = null; }
     if (alarmTimerId) { clearInterval(alarmTimerId); alarmTimerId = null; }
 });
+
+// 监听主进程退出前的强行刷盘通知
+if (window.api && window.api.onAppSavingBeforeQuit) {
+    window.api.onAppSavingBeforeQuit(() => {
+        if (saveTimer && contentDirty) {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+            try { window.api.saveNotes(notes); } catch (_) {}
+        }
+        if (todoSaveTimer) {
+            clearTimeout(todoSaveTimer);
+            todoSaveTimer = null;
+            try { window.api.saveTodos(todos); } catch (_) {}
+        }
+    });
+}
 
 /* ==================== 数据持久化 ==================== */
 // 串行化保存：保存期间若有新保存请求，标记 pending，待当前保存结束后再来一次，
@@ -638,6 +615,8 @@ document.addEventListener('contextmenu', (e) => {
 async function deleteNote(id) {
     // 取消挂起的自动保存定时器，防止切换后回调用错 currentNoteId 写盘
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    // 修复：删除/归档/切换/新建便签时也清理 pushTimer，避免向已不存在的便签推送脏数据
+    if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
     // 找到被删除的便签，移入垃圾桶（添加 trashedAt 字段记录删除时间）
     const deleted = notes.find(n => n.id === id);
     if (deleted) {
@@ -658,6 +637,8 @@ async function deleteNote(id) {
 // 归档便签函数（点击即归档，不弹确认框，移入归档文件夹）
 async function archiveNote(id) {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    // 修复：删除/归档/切换/新建便签时也清理 pushTimer，避免向已不存在的便签推送脏数据
+    if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
     const archived = notes.find(n => n.id === id);
     if (archived) {
         archived.archivedAt = now();
@@ -678,6 +659,8 @@ let switchNoteToken = 0;  // 自增 token，防止快速连续切便签时旧回
 async function switchNote(id) {
     // 取消挂起的自动保存定时器，防止切换后回调把旧内容写到新便签
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    // 修复：删除/归档/切换/新建便签时也清理 pushTimer，避免向已不存在的便签推送脏数据
+    if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
     // 保存当前便签的未保存内容
     if (contentDirty && currentNoteId) {
         const cur = getCurrentNote();
@@ -696,6 +679,8 @@ async function switchNote(id) {
 async function createNote() {
     // 取消挂起的自动保存定时器，防止新建后回调把内容写到新便签
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    // 修复：删除/归档/切换/新建便签时也清理 pushTimer，避免向已不存在的便签推送脏数据
+    if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
     if (contentDirty && currentNoteId) {
         const cur = getCurrentNote();
         if (cur) { cur.content = noteInput.value; cur.updatedAt = now(); contentDirty = false; }
@@ -882,6 +867,8 @@ async function deferTodo(id) {
 
 async function saveContentAndFlush() {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    // 修复：删除/归档/切换/新建便签时也清理 pushTimer，避免向已不存在的便签推送脏数据
+    if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
     const note = getCurrentNote();
     if (note) { note.content = noteInput.value; note.updatedAt = now(); }
     contentDirty = false;
@@ -1850,371 +1837,6 @@ imgSaveBtn.addEventListener('click', async () => {
     }
 });
 
-/* ==================== TTS 语音工坊模块 ====================
- * 架构：渲染进程只管 UI 与 <audio> 播放，所有百炼 HTTP 请求在主进程完成。
- * 音频通过 ttsfile:// 自定义协议加载（非 base64），符合 CSP 与最小传输约束。
- * 防抖：文本输入 200ms（字数计数器更新）。
- * 错误处理：所有 IPC 调用处理 {success:false,message}，界面给友好提示。
- * ====================================================== */
-
-// 百炼预设音色列表（按精确模型名区分，音色与模型必须严格匹配，否则报 400/411）
-// 来源：官方音色列表文档（更新于 2026-07-23）
-//   Qwen-Audio-Plus: https://help.aliyun.com/zh/model-studio/qwen-audio-tts-voice-list
-//   CosyVoice: https://help.aliyun.com/zh/model-studio/cosyvoice-voice-list
-// 注意：plus 与 flash 的系统音色列表不同，不可混用！
-const TTS_PRESET_VOICES_BY_MODEL = {
-    // qwen-audio-3.0-tts-plus 专属系统音色（旗舰音色）
-    'qwen-audio-3.0-tts-plus': [
-        { id: 'longanlingxin', name: '龙安灵心', desc: '知心温暖音·女·25岁·中英文', lang: '中英文', gender: '女', tag: '旗舰' },
-        { id: 'longanlufeng', name: '龙安鲁风', desc: '明亮开朗音·男·25岁·中英文', lang: '中英文', gender: '男', tag: '旗舰' },
-    ],
-    // qwen-audio-3.0-tts-flash 专属系统音色（精品音色）
-    'qwen-audio-3.0-tts-flash': [
-        { id: 'longanhuan_v3.6', name: '龙安欢', desc: '知心温暖·女·25岁·中英文', lang: '中英文', gender: '女', tag: '精品中文' },
-        { id: 'longjielidou_v3.6', name: '龙杰力豆', desc: '天真男童·5岁·中英文', lang: '中英文', gender: '男', tag: '精品儿童' },
-        { id: 'loongeva_v3.6', name: 'loongeva', desc: '高智美音·女·28岁·英文', lang: '英文', gender: '女', tag: '精品英文' },
-        { id: 'loongjohn', name: 'loongJohn', desc: '沉稳亲切美音·男·28岁·英文', lang: '英文', gender: '男', tag: '精品英文' },
-    ],
-    // cosyvoice-v1 / cosyvoice-v2 等共用 CosyVoice 音色库
-    'cosyvoice': [
-        { id: 'longxiaochun', name: '龙小淳', desc: '温柔女声·中英文', lang: '中英文', gender: '女', tag: '经典' },
-        { id: 'longlaotie', name: '龙老铁', desc: '东北男声·中文', lang: '中文', gender: '男', tag: '经典' },
-        { id: 'longshu', name: '龙书', desc: '讲书男声·中英文', lang: '中英文', gender: '男', tag: '经典' },
-        { id: 'longxiao', name: '龙小', desc: '清亮女声·中英文', lang: '中英文', gender: '女', tag: '经典' },
-        { id: 'longcheng', name: '龙诚', desc: '沉稳男声·中英文', lang: '中英文', gender: '男', tag: '经典' },
-        { id: 'longyue', name: '龙悦', desc: '活泼女声·中英文', lang: '中英文', gender: '女', tag: '经典' },
-        { id: 'longjielidou', name: '龙杰力豆', desc: '激情男声·中英文', lang: '中英文', gender: '男', tag: '经典' },
-        { id: 'longmaimai', name: '龙麦麦', desc: '萌趣女声·中英文', lang: '中英文', gender: '女', tag: '经典' },
-    ],
-};
-
-// 根据当前模型返回匹配的预设音色列表（模型与音色不匹配会报 400/411）
-// 精确匹配优先：plus 与 flash 音色列表不同，必须区分
-function getPresetVoicesForModel(model) {
-    const m = (model || '').toLowerCase();
-    // 精确匹配 qwen-audio-3.0-tts-plus / qwen-audio-3.0-tts-flash
-    if (m === 'qwen-audio-3.0-tts-plus') return TTS_PRESET_VOICES_BY_MODEL['qwen-audio-3.0-tts-plus'];
-    if (m === 'qwen-audio-3.0-tts-flash') return TTS_PRESET_VOICES_BY_MODEL['qwen-audio-3.0-tts-flash'];
-    // 兜底：其他 qwen-audio 变体（如未来新版本）按 flash 处理（flash 音色更全）
-    if (m.indexOf('qwen-audio') === 0) return TTS_PRESET_VOICES_BY_MODEL['qwen-audio-3.0-tts-flash'];
-    if (m.indexOf('cosyvoice') === 0) return TTS_PRESET_VOICES_BY_MODEL['cosyvoice'];
-    // 未知模型：返回空列表，强制用户用默认音色或手动输入，避免不匹配报错
-    return [];
-}
-
-// 当前 TTS 配置缓存（从主进程加载，供合成时读取音色/格式等）
-let ttsConfigCache = {};
-// 当前生成的音频 URL（用于下载）
-let ttsCurrentAudioUrl = '';
-
-// 初始化预设音色下拉框（根据当前模型动态匹配音色，避免音色与模型不匹配报 400/411）
-// 同时更新音色信息卡片，展示当前选中音色的详细描述
-function initTtsVoiceSelect() {
-    if (!ttsVoiceSelect) return;
-    // 保留第一个"默认音色"选项
-    ttsVoiceSelect.innerHTML = '<option value="">默认音色（由模型自动匹配）</option>';
-    // 根据当前配置的模型选择匹配的预设音色列表
-    const currentModel = (ttsConfigCache && ttsConfigCache.model) || '';
-    const presetVoices = getPresetVoicesForModel(currentModel);
-    if (presetVoices.length > 0) {
-        const presetGroup = document.createElement('optgroup');
-        presetGroup.label = '预设音色（' + currentModel + '）';
-        presetVoices.forEach(v => {
-            const opt = document.createElement('option');
-            opt.value = v.id;
-            opt.textContent = v.name + '（' + v.desc + '）';
-            presetGroup.appendChild(opt);
-        });
-        ttsVoiceSelect.appendChild(presetGroup);
-    }
-    // 恢复已保存的音色选择（仅当该音色在当前模型的预设列表中时才恢复，避免不匹配报 411）
-    const savedVoice = (ttsConfigCache && ttsConfigCache.voice) || '';
-    if (savedVoice && presetVoices.length > 0 && presetVoices.some(v => v.id === savedVoice)) {
-        ttsVoiceSelect.value = savedVoice;
-    } else {
-        ttsVoiceSelect.value = '';
-    }
-    // 更新音色信息卡片
-    updateTtsVoiceInfo();
-}
-
-// 更新音色信息卡片：展示当前选中音色的详细描述（无选中时显示默认音色说明）
-function updateTtsVoiceInfo() {
-    const infoEl = $('ttsVoiceInfo');
-    if (!infoEl) return;
-    const voiceId = ttsVoiceSelect ? ttsVoiceSelect.value : '';
-    if (!voiceId) {
-        infoEl.textContent = '默认音色：由模型自动匹配最佳音色';
-        infoEl.className = 'tts-voice-info tts-voice-info-default';
-        return;
-    }
-    const currentModel = (ttsConfigCache && ttsConfigCache.model) || '';
-    const voices = getPresetVoicesForModel(currentModel);
-    const v = voices.find(x => x.id === voiceId);
-    if (v) {
-        infoEl.textContent = v.name + ' · ' + v.desc;
-        infoEl.className = 'tts-voice-info';
-    } else {
-        infoEl.textContent = '自定义音色：' + voiceId;
-        infoEl.className = 'tts-voice-info';
-    }
-}
-
-// 加载 TTS 配置到设置面板表单
-async function loadTtsConfigToForm() {
-    try {
-        const cfg = await window.api.loadTtsConfig();
-        ttsConfigCache = cfg;
-        if (ttsBaseUrl) ttsBaseUrl.value = cfg.baseUrl || '';
-        if (ttsApiKey) ttsApiKey.value = cfg.apiKey || '';
-        if (ttsModel) ttsModel.value = cfg.model || '';
-        // 同步 TTS 页模型快选器（若当前模型不在预设列表，追加为自定义选项）
-        if (ttsModelSelect) {
-            const currentModel = cfg.model || '';
-            const presetModels = ['qwen-audio-3.0-tts-plus', 'qwen-audio-3.0-tts-flash', 'cosyvoice-v1', 'cosyvoice-v1-instruct'];
-            const exists = presetModels.indexOf(currentModel) >= 0;
-            if (currentModel && !exists) {
-                // 追加自定义模型选项
-                const customOpt = ttsModelSelect.querySelector('option[data-custom="1"]');
-                if (customOpt) customOpt.remove();
-                const opt = document.createElement('option');
-                opt.value = currentModel;
-                opt.textContent = currentModel + '（自定义）';
-                opt.setAttribute('data-custom', '1');
-                ttsModelSelect.appendChild(opt);
-            } else {
-                // 清除之前的自定义选项
-                const customOpt = ttsModelSelect.querySelector('option[data-custom="1"]');
-                if (customOpt) customOpt.remove();
-            }
-            ttsModelSelect.value = currentModel;
-        }
-        // 初始化音色下拉框
-        initTtsVoiceSelect();
-    } catch (e) {
-        console.error('加载 TTS 配置失败:', e.message);
-    }
-}
-
-// 保存 TTS 配置（复用 flashBtn 做闪烁反馈）
-if (ttsConfigSaveBtn) {
-    ttsConfigSaveBtn.addEventListener('click', async () => {
-        const baseUrlVal = ttsBaseUrl.value.trim();
-        const apiKeyVal = ttsApiKey.value.trim();
-        const modelVal = ttsModel.value.trim();
-        if (!baseUrlVal && !apiKeyVal && !modelVal) {
-            flashBtn(ttsConfigSaveBtn, '#FF9F0A');  // 橙色：空内容提示
-            return;
-        }
-        ttsConfigSaveBtn.disabled = true;
-        ttsConfigSaveBtn.textContent = '保存中...';
-        try {
-            const result = await window.api.saveTtsConfig({
-                baseUrl: baseUrlVal,
-                apiKey: apiKeyVal,
-                model: modelVal,
-            });
-            if (result && result.success === false) {
-                flashBtn(ttsConfigSaveBtn, '#FF453A');  // 红色：失败
-                return;
-            }
-            flashBtn(ttsConfigSaveBtn, '#34C759');  // 绿色：成功
-            // 保存后重新加载配置（刷新缓存）
-            await loadTtsConfigToForm();
-        } catch (err) {
-            flashBtn(ttsConfigSaveBtn, '#FF453A');
-        } finally {
-            ttsConfigSaveBtn.disabled = false;
-            ttsConfigSaveBtn.textContent = '保存语音设置';
-        }
-    });
-}
-
-// ===== 模型快选器：切换模型后自动保存并刷新音色列表 =====
-if (ttsModelSelect) {
-    ttsModelSelect.addEventListener('change', async () => {
-        const newModel = ttsModelSelect.value;
-        if (!newModel) return;
-        // 防重入：异步操作期间禁用下拉框，避免快速切换导致竞态
-        ttsModelSelect.disabled = true;
-        try {
-            // 保存新模型到配置（复用已有 baseUrl/apiKey）
-            // 关键：传入 voice:'' 清空已保存的旧音色，避免旧模型音色与新模型不匹配报 411
-            const result = await window.api.saveTtsConfig({
-                baseUrl: (ttsConfigCache && ttsConfigCache.baseUrl) || '',
-                apiKey: (ttsConfigCache && ttsConfigCache.apiKey) || '',
-                model: newModel,
-                voice: '',
-            });
-            if (result && result.success === false) {
-                ttsStatus.textContent = '模型切换失败：' + (result.message || '未知错误');
-                ttsStatus.className = 'tts-status error';
-                return;
-            }
-            // 重置音色选择为默认（避免旧模型音色与新模型不匹配报 411）
-            if (ttsVoiceSelect) ttsVoiceSelect.value = '';
-            // 重新加载配置并刷新音色列表
-            await loadTtsConfigToForm();
-            // 同步设置面板的模型输入框
-            if (ttsModel) ttsModel.value = newModel;
-            ttsStatus.textContent = '已切换模型：' + newModel;
-            ttsStatus.className = 'tts-status success';
-            setTimeout(() => { if (ttsStatus.textContent === '已切换模型：' + newModel) ttsStatus.textContent = ''; }, 2000);
-        } catch (err) {
-            ttsStatus.textContent = '模型切换失败：' + err.message;
-            ttsStatus.className = 'tts-status error';
-        } finally {
-            ttsModelSelect.disabled = false;
-        }
-    });
-}
-
-// ===== 音色选择变更：实时更新音色信息卡片 + 防抖保存到配置 =====
-if (ttsVoiceSelect) {
-    let voiceSaveTimer = null;
-    ttsVoiceSelect.addEventListener('change', () => {
-        updateTtsVoiceInfo();
-        // 防抖保存音色到配置（1.5s），避免频繁 IPC 调用
-        if (voiceSaveTimer) clearTimeout(voiceSaveTimer);
-        voiceSaveTimer = setTimeout(async () => {
-            try {
-                await window.api.saveTtsConfig({ voice: ttsVoiceSelect.value || '' });
-                // 同步缓存，避免下次 loadTtsConfigToForm 覆盖刚保存的值
-                if (ttsConfigCache) ttsConfigCache.voice = ttsVoiceSelect.value || '';
-            } catch (e) {
-                console.error('保存音色选择失败:', e.message);
-            }
-        }, 1500);
-    });
-}
-
-// ===== 文本输入字数计数器（200ms 防抖）=====
-if (ttsText) {
-    let textDebounceTimer = null;
-    ttsText.addEventListener('input', () => {
-        if (textDebounceTimer) clearTimeout(textDebounceTimer);
-        textDebounceTimer = setTimeout(() => {
-            const len = ttsText.value.length;
-            ttsTextCounter.textContent = len + ' / 1000';
-            // 超过上限时计数器变红
-            ttsTextCounter.style.color = len >= 1000 ? 'var(--accent-rose)' : 'var(--text-4)';
-        }, 200);
-    });
-}
-
-// ===== 生成语音按钮 =====
-if (ttsGenBtn) {
-    ttsGenBtn.addEventListener('click', async () => {
-        const text = ttsText.value.trim();
-        if (!text) {
-            ttsStatus.textContent = '请输入要合成的文本';
-            ttsStatus.className = 'tts-status error';
-            flashBtn(ttsGenBtn, '#FF9F0A');
-            return;
-        }
-        if (text.length > 1000) {
-            ttsStatus.textContent = '文本超过 1000 字上限';
-            ttsStatus.className = 'tts-status error';
-            flashBtn(ttsGenBtn, '#FF453A');
-            return;
-        }
-
-        // 禁用按钮 + Loading 状态
-        ttsGenBtn.disabled = true;
-        const originalText = ttsGenBtn.innerHTML;
-        ttsGenBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px;animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>合成中...';
-        ttsStatus.textContent = '正在合成语音，请稍候...';
-        ttsStatus.className = 'tts-status';
-        ttsPlayerWrap.style.display = 'none';
-
-        try {
-            const params = {
-                text: text,
-                voice: ttsVoiceSelect.value || '',
-                format: ttsFormatSelect.value || 'mp3',
-                instruct: ttsInstruct.value.trim(),
-            };
-            const result = await window.api.ttsSynthesize(params);
-            if (!result || result.success === false) {
-                ttsStatus.textContent = '合成失败：' + (result && result.message || '未知错误');
-                ttsStatus.className = 'tts-status error';
-                flashBtn(ttsGenBtn, '#FF453A');
-                return;
-            }
-            // 合成成功：赋值 audio 并自动播放
-            ttsCurrentAudioUrl = result.url;
-            ttsAudio.src = result.url;
-            ttsPlayerWrap.style.display = '';
-            ttsStatus.textContent = '合成成功' + (result.durationMs ? '（' + (result.durationMs / 1000).toFixed(1) + '秒）' : '');
-            ttsStatus.className = 'tts-status success';
-            // 自动播放
-            try { await ttsAudio.play(); } catch (_) { /* 自动播放可能被浏览器策略阻止 */ }
-        } catch (err) {
-            ttsStatus.textContent = '合成失败：' + err.message;
-            ttsStatus.className = 'tts-status error';
-            flashBtn(ttsGenBtn, '#FF453A');
-        } finally {
-            ttsGenBtn.disabled = false;
-            ttsGenBtn.innerHTML = originalText;
-        }
-    });
-}
-
-// ===== 下载音频按钮（改用主进程 dialog.showSaveDialog，替代 <a download> blob）=====
-if (ttsDownloadBtn) {
-    ttsDownloadBtn.addEventListener('click', async () => {
-        if (!ttsCurrentAudioUrl) {
-            ttsStatus.textContent = '没有可下载的音频';
-            ttsStatus.className = 'tts-status error';
-            return;
-        }
-        try {
-            ttsDownloadBtn.disabled = true;
-            // 通过主进程弹保存对话框 + 复制文件（CSP 严格时 <a download> blob 不可靠）
-            const suggestedName = 'tts_' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '');
-            const result = await window.api.ttsSaveAudio(ttsCurrentAudioUrl, suggestedName);
-            if (result && result.success) {
-                ttsStatus.textContent = '音频已保存到：' + result.path;
-                ttsStatus.className = 'tts-status success';
-            } else if (result && result.canceled) {
-                // 用户取消，不显示错误
-            } else {
-                ttsStatus.textContent = '保存失败：' + (result && result.message || '未知错误');
-                ttsStatus.className = 'tts-status error';
-            }
-        } catch (err) {
-            ttsStatus.textContent = '下载失败：' + err.message;
-            ttsStatus.className = 'tts-status error';
-        } finally {
-            ttsDownloadBtn.disabled = false;
-        }
-    });
-}
-
-// ===== 清理缓存按钮 =====
-if (ttsCleanupBtn) {
-    ttsCleanupBtn.addEventListener('click', async () => {
-        ttsCleanupBtn.disabled = true;
-        try {
-            const result = await window.api.ttsCleanupCache();
-            if (result && result.success === false) {
-                ttsStatus.textContent = '清理失败：' + (result.message || '未知错误');
-                ttsStatus.className = 'tts-status error';
-                return;
-            }
-            const deleted = (result && result.deleted) || 0;
-            ttsStatus.textContent = '已清理 ' + deleted + ' 个缓存文件';
-            ttsStatus.className = 'tts-status success';
-        } catch (err) {
-            ttsStatus.textContent = '清理失败：' + err.message;
-            ttsStatus.className = 'tts-status error';
-        } finally {
-            ttsCleanupBtn.disabled = false;
-            setTimeout(() => { ttsStatus.textContent = ''; }, 2000);
-        }
-    });
-}
-
 /* ==================== AI 聊天模块 ==================== */
 // 聊天数据：{ id, title, messages:[{role,content,ts}], createdAt, updatedAt }
 let aiChats = [];
@@ -2232,7 +1854,10 @@ const MAX_CHAT_TITLE = 18;
 function loadChats() {
     try {
         const raw = localStorage.getItem(CHATS_STORAGE_KEY);
-        aiChats = raw ? JSON.parse(raw) : [];
+        const parsed = raw ? JSON.parse(raw) : [];
+        // 修复：原实现无 Array.isArray 校验，若 localStorage 数据被外部写入为
+        // "null"/"{}"/"5" 等合法 JSON 但非数组，后续 aiChats.length 等会抛 TypeError
+        aiChats = Array.isArray(parsed) ? parsed : [];
     } catch (e) {
         console.error('加载聊天记录失败:', e);
         aiChats = [];
@@ -2605,6 +2230,8 @@ function cleanupChatImages(chat) {
 // 使用 localStorage 标志位避免重复迁移；部分失败时不置位，下次启动自动续迁。
 async function migrateChatImagesToDisk() {
     if (localStorage.getItem('chatImagesMigratedV3') === '1') return;
+    // 修复：防御性校验，aiChats 非数组时直接返回，避免 for...of 抛 TypeError
+    if (!Array.isArray(aiChats)) return;
     let migrated = 0;
     let failed = 0;
     for (const chat of aiChats) {
@@ -2814,31 +2441,59 @@ async function streamAssistantReply(chat) {
 
     const { streamWrap, streamBubble, thinkingEl, thinkingBodyEl } = createStreamPlaceholder(chatThinkingEnabled);
 
-    const streamedContentArr = [];
-    const streamedReasoningArr = [];
     let streamedContent = '';
     let streamedReasoning = '';
     let firstContentReceived = false;
 
+    // 智能滚动 & rAF 渲染调度控制
+    let contentDirty = false;
+    let reasoningDirty = false;
+    let streamRafId = null;
+
+    const isScrolledNearBottom = (el, threshold = 40) => {
+        if (!el) return true;
+        return (el.scrollHeight - el.scrollTop - el.clientHeight) <= threshold;
+    };
+
+    const flushStreamUI = () => {
+        streamRafId = null;
+        const userNearBottom = isScrolledNearBottom(chatMessages);
+        if (reasoningDirty && thinkingBodyEl) {
+            thinkingBodyEl.textContent = streamedReasoning;
+            reasoningDirty = false;
+        }
+        if (contentDirty && streamBubble) {
+            streamBubble.textContent = streamedContent + '▌';
+            contentDirty = false;
+        }
+        if (userNearBottom && chatMessages) {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+    };
+
+    const scheduleStreamUI = () => {
+        if (!streamRafId) {
+            streamRafId = requestAnimationFrame(flushStreamUI);
+        }
+    };
+
     const removeChunkListener = window.api.onChatChunk((chunk) => {
         if (chunk.type === 'reasoning' && thinkingBodyEl) {
-            if (streamedReasoningArr.length === 0) {
+            if (!streamedReasoning && chunk.text) {
                 thinkingBodyEl.textContent = '';
             }
-            streamedReasoningArr.push(chunk.text);
-            streamedReasoning = streamedReasoningArr.join('');
-            thinkingBodyEl.textContent = streamedReasoning;
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            streamedReasoning += chunk.text;
+            reasoningDirty = true;
+            scheduleStreamUI();
         } else if (chunk.type === 'content') {
             if (!firstContentReceived) {
                 firstContentReceived = true;
                 streamBubble.textContent = '';
                 if (thinkingEl) thinkingEl.classList.remove('expanded');
             }
-            streamedContentArr.push(chunk.text);
-            streamedContent = streamedContentArr.join('');
-            streamBubble.textContent = streamedContent + '▌';
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            streamedContent += chunk.text;
+            contentDirty = true;
+            scheduleStreamUI();
         }
     });
 
@@ -2888,6 +2543,10 @@ async function streamAssistantReply(chat) {
         }
     } finally {
         removeChunkListener();
+        if (streamRafId) {
+            cancelAnimationFrame(streamRafId);
+            streamRafId = null;
+        }
         chatSending = false;
         setSendButtonState(false);
         chatRegenBtn.disabled = false;
@@ -3177,7 +2836,12 @@ createGenBtn.addEventListener('click', async () => {
             if (typeof r !== 'string' || !r || !/^[A-Za-z]:[\\/]|^\/|^\\\\/.test(r)) {
                 throw new Error('视频生成返回的路径无效');
             }
-            createVideo.src = 'file:///' + r.replace(/\\/g, '/');
+            // 修复：UNC 路径 \\server\share 替换后为 //server/share，
+            // 拼接 file:/// 得到 file://///server/share（5 斜杠）错误格式
+            // 正确格式应为 file://server/share（RFC 8089）
+            createVideo.src = r.startsWith('\\\\')
+                ? 'file://' + r.slice(2).replace(/\\/g, '/')
+                : 'file:///' + r.replace(/\\/g, '/');
             createVideo.style.display = 'block';
             createPlaceholder.style.display = 'none';
         } else {
@@ -3249,25 +2913,6 @@ settingsAiBtn.addEventListener('click', async () => {
     }
     // 复用启动时的统一加载逻辑（聊天/图片视频/语音三段配置），避免重复代码
     await loadAllAiConfigsToForm();
-});
-
-/* ==================== 透明度弹出面板 ==================== */
-settingsOpacityBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeAllPanels();
-    opacityPanel.classList.add('open');
-    positionPanel(settingsBtn, opacityPanel);
-    const val = parseInt(opacitySlider.value, 10);
-    opacityValue.textContent = val + '%';
-});
-
-// 防抖 IPC：拖动滑块会高频触发 input 事件，合并为停顿 80ms 后单次 setOpacity 调用
-// 避免每像素移动都发起一次跨进程 IPC，降低主进程消息队列压力
-const debouncedSetOpacity = debounce((v) => { window.api.setOpacity(v); }, 80);
-opacitySlider.addEventListener('input', function() {
-    const val = parseInt(this.value, 10);
-    opacityValue.textContent = val + '%';
-    debouncedSetOpacity(val / 100);
 });
 
 /* ==================== 闹钟音量弹出面板（仿透明度面板） ====================
@@ -3634,7 +3279,7 @@ fontSizeResetBtn.addEventListener('click', () => {
 });
 
 /* ==================== FM 收音机设置面板（P5）====================
- * 与 TTS 配置同级存储在 settings.aiConfig.radioConfig（P0 已实现主进程 IPC）
+ * 存储在 settings.aiConfig.radioConfig（P0 已实现主进程 IPC）
  * 字段：apiBaseUrl / timeout / defaultCountry / customStations
  * 自定义电台 JSON 格式：{ version:1, stations:[{name,url,favicon,country,tags}] }
  */
@@ -3838,7 +3483,6 @@ if (fmResetBtn) {
 /* ==================== 关闭所有弹出面板 ==================== */
 function closeAllPanels() {
     settingsPanel.classList.remove('open');
-    opacityPanel.classList.remove('open');
     palettePanel.classList.remove('open');
     fontSetPanel.classList.remove('open');
     if (alarmVolumePanel) alarmVolumePanel.classList.remove('open');
@@ -3851,9 +3495,6 @@ document.addEventListener('click', (e) => {
     // 点击设置按钮本身由其自身事件处理
     if (e.target !== settingsBtn && !settingsPanel.contains(e.target)) {
         settingsPanel.classList.remove('open');
-    }
-    if (!opacityPanel.contains(e.target) && e.target !== settingsOpacityBtn) {
-        opacityPanel.classList.remove('open');
     }
     if (palettePanel && !palettePanel.contains(e.target) && e.target !== settingsPaletteBtn) {
         palettePanel.classList.remove('open');
@@ -4925,8 +4566,6 @@ const tabPages = {
     create: $('tab-create'),
     clock: $('tab-clock'),
     calendar: $('tab-calendar'),
-    translate: $('tab-translate'),
-    tts: $('tab-tts'),
     music: $('tab-music')
 };
 
@@ -4971,14 +4610,12 @@ tabs.forEach(tab => {
         currentTab = target;
         tabs.forEach(t => t.classList.remove('active'));
         this.classList.add('active');
-        // 六个 tab 独立显示：便签、AI 聊天、AI 创作、闹钟、日历、翻译
+        // 六个 tab 独立显示：便签、AI 聊天、AI 创作、闹钟、日历、音乐
         tabPages.notes.classList.toggle('active', target === 'notes');
         tabPages.chat.classList.toggle('active', target === 'chat');
         tabPages.create.classList.toggle('active', target === 'create');
         tabPages.clock.classList.toggle('active', target === 'clock');
         tabPages.calendar.classList.toggle('active', target === 'calendar');
-        tabPages.translate.classList.toggle('active', target === 'translate');
-        tabPages.tts.classList.toggle('active', target === 'tts');
         tabPages.music.classList.toggle('active', target === 'music');
         // 动态移动内容编辑区到对应 slot
         if (target === 'notes') {
@@ -5002,223 +4639,11 @@ tabs.forEach(tab => {
             if (window.MusicModule && window.MusicModule.onTabActivated) window.MusicModule.onTabActivated();
             // 同时通知 FM 收音机模块
             if (window.RadioModule && window.RadioModule.onTabActivated) window.RadioModule.onTabActivated();
-        } else if (target === 'translate') {
-            translateSource.focus();
         }
     });
 });
 
-/* ==================== 翻译功能（支持单图 OCR 翻译） ==================== */
-let translateBusy = false;
-// 翻译附件：单图模式，最多 1 张。元素结构 {name, path, isImage}
-let translateAttachment = null;
 
-// 渲染翻译附件缩略图（单图）
-function renderTranslateAttachment() {
-    if (!translateAttachments) return;
-    translateAttachments.innerHTML = '';
-    if (!translateAttachment) {
-        translateAttachments.classList.remove('has-files');
-        return;
-    }
-    translateAttachments.classList.add('has-files');
-    const att = translateAttachment;
-    const item = document.createElement('div');
-    item.className = 'translate-attach-item';
-    const thumb = document.createElement('img');
-    thumb.className = 'translate-attach-thumb';
-    thumb.src = att.path ? ('chatimg://chat-images/' + encodeURIComponent(att.path)) : '';
-    thumb.title = att.name || '翻译图片';
-    item.appendChild(thumb);
-    const name = document.createElement('span');
-    name.className = 'translate-attach-name';
-    name.textContent = att.name;
-    name.title = att.name;
-    item.appendChild(name);
-    const del = document.createElement('button');
-    del.className = 'translate-attach-del';
-    del.textContent = '✕';
-    del.title = '移除图片';
-    del.addEventListener('click', () => {
-        clearTranslateAttachment();
-    });
-    item.appendChild(del);
-    translateAttachments.appendChild(item);
-}
-
-// 添加翻译附件（单图模式：新图替换旧图，并清理旧图磁盘文件）
-async function setTranslateAttachment(file) {
-    if (!file) return;
-    // 翻译进行中拒绝添加图片，避免状态错乱
-    if (translateBusy) return;
-    if (!file.type.startsWith('image/')) {
-        alert('仅支持图片文件');
-        return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-        alert('图片 "' + file.name + '" 超过 10MB 限制');
-        return;
-    }
-    try {
-        const dataUrl = await readFileAsDataURL(file);
-        const fileName = await window.api.saveChatImage(dataUrl);
-        // 单图模式：清理旧图
-        if (translateAttachment && translateAttachment.path) {
-            try { await window.api.deleteChatImage(translateAttachment.path); } catch (_) {}
-        }
-        translateAttachment = { name: file.name, path: fileName, isImage: true };
-        renderTranslateAttachment();
-    } catch (e) {
-        alert('读取图片失败：' + e.message);
-    }
-}
-
-// 清理翻译附件（含磁盘文件删除）。先同步置空，再异步删盘，避免竞态。
-async function clearTranslateAttachment() {
-    const att = translateAttachment;
-    translateAttachment = null;
-    renderTranslateAttachment();
-    if (att && att.path) {
-        try { await window.api.deleteChatImage(att.path); } catch (_) {}
-    }
-}
-
-async function doTranslate() {
-    if (translateBusy) return;
-    const text = translateSource.value.trim();
-    const hasImage = !!(translateAttachment && translateAttachment.path);
-    if (!text && !hasImage) {
-        translateResult.textContent = '请先输入要翻译的内容或上传图片';
-        translateResult.className = 'translate-result error';
-        return;
-    }
-    translateBusy = true;
-    translateBtn.disabled = true;
-    translateSource.disabled = true;
-    if (translateUploadBtn) translateUploadBtn.disabled = true;
-    translateResult.textContent = '正在翻译...';
-    translateResult.className = 'translate-result loading';
-    translateCopyBtn.style.display = 'none';
-    try {
-        const targetLang = translateLangSelect ? translateLangSelect.value : 'zh';
-        // 单图模式：传 path 给主进程，主进程读回 base64 发给 AI
-        const images = hasImage ? [{ path: translateAttachment.path }] : [];
-        const result = await window.api.translate(text, targetLang, images);
-        translateResult.textContent = result || '（空回复）';
-        translateResult.className = 'translate-result';
-        translateCopyBtn.style.display = '';
-    } catch (err) {
-        translateResult.textContent = '翻译失败：' + err.message;
-        translateResult.className = 'translate-result error';
-        translateCopyBtn.style.display = 'none';
-    } finally {
-        translateBusy = false;
-        translateBtn.disabled = false;
-        translateSource.disabled = false;
-        if (translateUploadBtn) translateUploadBtn.disabled = false;
-        // 翻译完成后自动清理图片（无论成功失败），避免磁盘堆积
-        if (translateAttachment) {
-            clearTranslateAttachment();
-        }
-    }
-}
-
-translateBtn.addEventListener('click', doTranslate);
-
-// Ctrl+Enter 快速翻译
-translateSource.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        doTranslate();
-    }
-});
-
-// 上传按钮触发文件选择
-if (translateUploadBtn) {
-    translateUploadBtn.addEventListener('click', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        if (translateFileInput) {
-            translateFileInput.value = '';
-            translateFileInput.click();
-        }
-    });
-}
-
-// 文件选择变化
-if (translateFileInput) {
-    translateFileInput.addEventListener('change', async () => {
-        if (translateFileInput.files && translateFileInput.files.length > 0) {
-            await setTranslateAttachment(translateFileInput.files[0]);
-            translateFileInput.value = '';
-        }
-    });
-}
-
-// 拖拽图片到原文输入框
-translateSource.addEventListener('dragover', (e) => {
-    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-    }
-});
-translateSource.addEventListener('drop', async (e) => {
-    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const file = e.dataTransfer.files[0];
-        if (file.type.startsWith('image/')) {
-            e.preventDefault();
-            await setTranslateAttachment(file);
-        }
-    }
-});
-
-// 粘贴图片（系统截图后 Ctrl+V）
-translateSource.addEventListener('paste', (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    for (const item of items) {
-        if (item.type && item.type.startsWith('image/')) {
-            const file = item.getAsFile();
-            if (file) {
-                e.preventDefault();
-                setTranslateAttachment(file);
-                return;
-            }
-        }
-    }
-});
-
-// 清空按钮
-translateClearBtn.addEventListener('click', () => {
-    translateSource.value = '';
-    translateResult.innerHTML = '<div class="translate-placeholder">译文将显示在这里</div>';
-    translateResult.className = 'translate-result';
-    translateCopyBtn.style.display = 'none';
-    if (translateAttachment) {
-        clearTranslateAttachment();
-    }
-    translateSource.focus();
-});
-
-// 语言选择变化：更新译文面板标题
-const LANG_LABELS = { zh: '中文', en: '英文', ja: '日文', fr: '法文', de: '德文', pt: '葡萄牙文', ar: '阿拉伯文', es: '西班牙文' };
-if (translateLangSelect) {
-    translateLangSelect.addEventListener('change', () => {
-        const langLabel = LANG_LABELS[translateLangSelect.value] || '中文';
-        const titleEl = document.querySelector('.translate-panel:nth-child(2) .translate-panel-header span');
-        if (titleEl) titleEl.textContent = '🌐 译文（' + langLabel + '）';
-    });
-}
-
-// 复制译文
-translateCopyBtn.addEventListener('click', () => {
-    const text = translateResult.textContent;
-    if (!text) return;
-    navigator.clipboard.writeText(text).then(() => {
-        const original = translateCopyBtn.innerHTML;
-        translateCopyBtn.innerHTML = '✓';
-        setTimeout(() => { translateCopyBtn.innerHTML = original; }, 1200);
-    }).catch(() => {});
-});
 
 /* ==================== Markdown 预览切换 ==================== */
 function renderMarkdownPreview() {
@@ -5581,7 +5006,12 @@ let alarms = []; // { id, h, m, s, enabled, triggered }
 function loadAlarms() {
     try {
         const raw = localStorage.getItem('alarms');
-        if (raw) alarms = JSON.parse(raw) || [];
+        // 修复：原实现 alarms = JSON.parse(raw) || []，若 raw 为 "{}" 则
+        // JSON.parse 返回 {}（truthy），|| [] 不生效，alarms.sort 等会抛 TypeError
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            alarms = Array.isArray(parsed) ? parsed : [];
+        }
     } catch (_) { alarms = []; }
 }
 
@@ -5651,15 +5081,17 @@ function renderAlarmList() {
         }
         // 铃声名称映射
         const soundNames = { default: '默认叮咚', apple: '苹果风格', android: '安卓风格', nokia: '诺基亚经典', crystal: '清脆铃声', bird: '鸟鸣', electronic: '电子闹钟' };
-        const soundName = soundNames[a.sound] || '默认叮咚';
-        // 文字说明
+        const soundName = escapeHtml(soundNames[a.sound] || '默认叮咚');
+        // 文字说明与备注安全转义防护
         const labelHtml = a.label ? `<span style="color:var(--text-2)"> · ${escapeHtml(a.label)}</span>` : '';
+        const noteHtml = a.note ? `<div style="font-size:12px;color:var(--text-3)">${escapeHtml(a.note)}</div>` : '';
         div.innerHTML = `
             <div class="alarm-item-left">
                 <button class="alarm-item-toggle ${a.enabled ? 'on' : ''}" data-action="toggle"></button>
                 <div>
                     <div class="alarm-item-time">${pad2(a.h)}:${pad2(a.m)}:${pad2(a.s)}${labelHtml}</div>
                     <div class="alarm-item-info">${info} · 🔔 ${soundName}</div>
+                    ${noteHtml}
                 </div>
             </div>
             <button class="alarm-item-delete" data-action="delete" title="删除">✕</button>
@@ -5794,8 +5226,8 @@ function renderAlarmListInfoOnly() {
 }
 
 /* ==================== 启动时统一加载所有 AI 配置 ====================
- * 打开软件后自动识别 AI 聊天/图片视频生成/语音生成的 API 地址、API Key、模型信息，
- * 填充到表单与运行时缓存（ttsConfigCache / 下拉框标签等），无需手动进入设置点保存即可直接使用。
+ * 打开软件后自动识别 AI 聊天/图片视频生成信息的 API 地址、API Key、模型信息，
+ * 填充到表单与运行时缓存，无需手动进入设置点保存即可直接使用。
  * 主进程本就从磁盘读取配置（loadSettings），此处补齐渲染进程侧的表单与缓存初始化，
  * 同时让"打开设置面板"时表单不再为空，避免用户误以为配置丢失而重复保存。
  * 各段独立 try/catch：任一模块加载失败不影响其他模块与主流程。
@@ -5820,12 +5252,6 @@ async function loadAllAiConfigsToForm() {
     } catch (e) {
         console.error('启动加载图片/视频配置失败:', e.message);
     }
-    // 3. TTS 语音配置（填充 ttsConfigCache + 音色下拉框）
-    try {
-        await loadTtsConfigToForm();
-    } catch (e) {
-        console.error('启动加载 TTS 配置失败:', e.message);
-    }
 }
 
 /* ==================== 初始化 ==================== */
@@ -5840,13 +5266,6 @@ async function initAppSettings() {
     applyDetailFontSize(detailFontSize);
     if (fontSizeSlider) fontSizeSlider.value = detailFontSize;
     if (fontSizeValue) fontSizeValue.textContent = detailFontSize + 'px';
-
-    try {
-        const savedOp = await window.api.getOpacity();
-        const pct = Math.round((savedOp || 1) * 100);
-        opacitySlider.value = pct;
-        opacityValue.textContent = pct + '%';
-    } catch (_) { /* ignore */ }
 
     try {
         const savedSize = await window.api.loadCustomSize();

@@ -4,7 +4,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const https = require('https');
 const http = require('http');
-const { exec } = require('child_process');
 const AdmZip = require('adm-zip');
 const { S3Client, PutObjectCommand, HeadBucketCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 // music-metadata-browser：解析音频 ID3/Vorbis 标签与封面图（V7.4 音乐模块）
@@ -14,6 +13,12 @@ const { parseNodeStream } = require('music-metadata-browser');
 // 日志子系统（内存缓冲 + 文件轮转 + 控制台劫持 + 进程异常捕获）
 // 加载时立即劫持 console 并注册 process 异常处理，所有 console.log/warn/error 自动旁路记录
 const logger = require('./logger');
+
+const { webdavRequest } = require('./services/syncService');
+const { serveLocalFile } = require('./main/protocol');
+const { streamDownloadToFile } = require('./main/downloadUtils');
+const { extractHttpError } = require('./main/httpUtils');
+const { getOverlayLoggerScript, getPopoutCommonCss, buildPopoutHtml } = require('./main/popoutTemplate');
 
 /* ==================== 全局变量 ==================== */
 let mainWindow = null;
@@ -44,6 +49,10 @@ const {
 
 // JSON 文件原子读写（loadJSON / saveJSON / saveJSONSync）：损坏自动备份 + Windows EPERM 重试
 const { loadJSON, saveJSON, saveJSONSync } = require('./json-io');
+const { trimTrailingSlash } = require('./shared-utils');
+
+// 路由解耦模块导入
+const { registerSystemIpc } = require('./main/ipc/systemIpc');
 
 /* ==================== 文件路径 ====================
  * 所有 getXxxPath / getXxxDir 已迁移至 paths.js，通过解构导入。
@@ -59,7 +68,6 @@ const {
     getCalendarPath,
     getActivityPath,
     getChatImagesDir,
-    getTtsCacheDir,
     getMusicDir,
     getMusicPlaylistPath,
     getMusicCoversDir,
@@ -68,132 +76,6 @@ const {
     getRadioFavoritesPath,
 } = require('./paths');
 
-/* ==================== TTS 语音缓存基础设施 ====================
- * 合成音频一律落盘到 userData/tts_cache/，渲染进程通过 ttsfile:// 协议按需加载。
- * 设计与 chat-images 同构：前端零 base64 内存占用，主进程统一管控文件生命周期。
- * 缓存策略：7 天过期 + 100MB 总量上限，app 启动时静默清理（异步、不阻塞启动）。
- * ============================================================= */
-const TTS_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;  // 7 天
-const TTS_CACHE_MAX_SIZE = 100 * 1024 * 1024;            // 100MB
-
-/**
- * 公共本地文件服务：为 chatimg/ttsfile 协议提供统一的文件读取逻辑。
- * 包含路径穿越防护、stat 校验、大小限制、MIME 映射、异步读取。
- *
- * @param {string} requestUrl - 协议请求的 URL（如 chatimg://chat-images/xxx.png）
- * @param {string} dir - 文件所在目录的绝对路径
- * @param {Object} mimeMap - 扩展名到 MIME 类型的映射
- * @param {Object} [options]
- * @param {string} [options.defaultMime='application/octet-stream'] - 未知扩展名的默认 MIME
- * @param {number} [options.maxSize=0] - 文件大小上限（字节，0 表示不限制）
- * @param {boolean} [options.requireRealpath=false] - 是否做 realpath 符号链接二次校验
- * @returns {Promise<Response>} Electron 协议 Response 对象
- */
-async function serveLocalFile(requestUrl, dir, mimeMap, options) {
-    options = options || {};
-    const defaultMime = options.defaultMime || 'application/octet-stream';
-    const maxSize = options.maxSize || 0;
-    const requireRealpath = options.requireRealpath || false;
-
-    const url = new URL(requestUrl);
-    const fileName = decodeURIComponent(url.pathname.slice(1));
-    const filePath = path.normalize(path.join(dir, fileName));
-    // 路径穿越防护：解析后路径必须在目标目录内，杜绝 ../../etc/passwd 之类
-    if (filePath !== dir && !filePath.startsWith(dir + path.sep)) {
-        return new Response('Forbidden', { status: 403 });
-    }
-    // 异步 stat：合并存在性 + 文件类型 + 大小校验，避免同步 I/O 阻塞主进程
-    let fileStat;
-    try {
-        fileStat = await fs.promises.stat(filePath);
-    } catch (_) {
-        return new Response('Not Found', { status: 404 });
-    }
-    if (!fileStat.isFile()) {
-        return new Response('Not Found', { status: 404 });
-    }
-    // 大小校验：超过上限拒绝读取，防止超大文件把渲染进程内存撑爆
-    if (maxSize > 0 && fileStat.size > maxSize) {
-        return new Response('Payload Too Large', { status: 413 });
-    }
-    // realpath 二次校验：防止 symlink 把访问重定向到目录外
-    if (requireRealpath) {
-        try {
-            const realPath = await fs.promises.realpath(filePath);
-            const realDir = await fs.promises.realpath(dir);
-            if (realPath !== realDir && !realPath.startsWith(realDir + path.sep)) {
-                return new Response('Forbidden', { status: 403 });
-            }
-        } catch (_) {
-            return new Response('Not Found', { status: 404 });
-        }
-    }
-    const ext = path.extname(fileName).toLowerCase();
-    const contentType = mimeMap[ext] || defaultMime;
-    // 异步读取：避免 readFileSync 阻塞主进程导致多文件加载时 UI 卡顿
-    const buffer = await fs.promises.readFile(filePath);
-    return new Response(buffer, { headers: { 'Content-Type': contentType, 'Cache-Control': 'max-age=3600' } });
-}
-
-/**
- * 静默清理 TTS 缓存：删除超过 7 天的文件；若总大小超 100MB 从最旧开始删直至达标。
- * 全程异步 fs.promises（不阻塞主进程），任何异常仅 console.error 吞掉，不影响启动。
- * @returns {Promise<{deleted: number}>} 实际删除的文件数
- */
-async function cleanTtsCache() {
-    const dir = getTtsCacheDir();
-    let deleted = 0;
-    try {
-        const entries = await fs.promises.readdir(dir);
-        const now = Date.now();
-        // 并行 stat 所有文件，收集 {name, mtime, size}
-        const stats = await Promise.all(entries.map(async (name) => {
-            try {
-                const filePath = path.join(dir, name);
-                const st = await fs.promises.stat(filePath);
-                return { name, filePath, mtime: st.mtimeMs, size: st.size, isFile: st.isFile() };
-            } catch (_) {
-                return null;  // stat 失败的项跳过（可能已被删或权限问题）
-            }
-        }));
-        const files = stats.filter(s => s && s.isFile);
-        // 第一轮：删过期文件（mtime 超 7 天）
-        for (const f of files) {
-            if (now - f.mtime > TTS_CACHE_MAX_AGE_MS) {
-                try { await fs.promises.unlink(f.filePath); deleted++; } catch (_) {}
-            }
-        }
-        // 第二轮：总量超 100MB 时，按 mtime 升序从最旧开始删
-        const remaining = files.filter(f => now - f.mtime <= TTS_CACHE_MAX_AGE_MS);
-        let totalSize = remaining.reduce((sum, f) => sum + f.size, 0);
-        remaining.sort((a, b) => a.mtime - b.mtime);  // 最旧在前
-        for (const f of remaining) {
-            if (totalSize <= TTS_CACHE_MAX_SIZE) break;
-            try { await fs.promises.unlink(f.filePath); totalSize -= f.size; deleted++; } catch (_) {}
-        }
-    } catch (e) {
-        // 目录不存在或读取失败属正常情况（首次使用尚未生成任何音频），静默吞掉
-        if (e.code !== 'ENOENT') console.error('清理 TTS 缓存失败:', e.message);
-    }
-    return { deleted };
-}
-
-/**
- * 将音频 Buffer 异步落盘到 tts_cache/，返回 ttsfile:// URL。
- * 文件名带时间戳 + 随机后缀，避免高频合成时碰撞。
- * @param {Buffer} audioBuffer - 音频字节
- * @param {string} ext - 文件扩展名（不含点，如 'mp3'）
- * @returns {Promise<string>} ttsfile:// URL，可直接赋给 <audio>.src
- */
-async function saveAudioToTtsCache(audioBuffer, ext) {
-    const dir = getTtsCacheDir();
-    // 异步递归创建目录，避免同步 mkdirSync 阻塞主进程
-    await fs.promises.mkdir(dir, { recursive: true });
-    const fileName = 'tts_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex') + '.' + (ext || 'mp3');
-    const filePath = path.join(dir, fileName);
-    await fs.promises.writeFile(filePath, audioBuffer);
-    return 'ttsfile://tts_cache/' + encodeURIComponent(fileName);
-}
 
 /* ==================== chatimg 自定义协议 ====================
  * 渲染进程通过 <img src="chatimg://chat-images/<filename>"> 直接加载本地图片，
@@ -206,16 +88,9 @@ protocol.registerSchemesAsPrivileged([
         scheme: 'chatimg',
         privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false }
     },
-    /* ttsfile 协议：渲染进程 <audio src="ttsfile://tts_cache/xxx.mp3"> 加载本地合成音频。
-     * 与 chatimg 同构：主进程读盘返回，渲染进程零 base64 内存占用。
-     * 必须在 app ready 前注册 scheme，否则不会被当作标准协议处理（无法用于 <audio>）。 */
-    {
-        scheme: 'ttsfile',
-        privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false }
-    },
     /* musicfile 协议：渲染进程 <audio src="musicfile://audio/<encoded-path>"> 加载本地音乐文件，
      * <img src="musicfile://cover/<encoded-path>"> 加载专辑封面。
-     * 与 ttsfile 同构：主进程读盘返回，含 realpath 二次校验防 symlink 逃逸。
+     * 含 realpath 二次校验防 symlink 逃逸。
      * 必须在 app ready 前注册 scheme，否则不会被当作标准协议处理。 */
     {
         scheme: 'musicfile',
@@ -691,8 +566,9 @@ function openPopoutWindowCommon(opts) {
     // 安全：阻止 popout 窗口打开新窗口 / 导航到外部 URL（防 XSS 后 RCE）
     win.webContents.setWindowOpenHandler(() => { return { action: 'deny' }; });
     win.webContents.on('will-navigate', (e, url) => {
-        // data: URL 加载的文档不允许导航到任何其他 URL
-        if (!url || !url.startsWith('data:')) e.preventDefault();
+        // 修复：原实现允许导航到 data: URL，XSS 后可跳转到无 CSP 的 data: 文档脱离约束
+        // popout 是单页文档，应拒绝所有导航
+        e.preventDefault();
     });
     win.once('ready-to-show', () => {
         win.show();
@@ -739,196 +615,14 @@ function togglePopoutPin(noteId, type) {
  * 注意：body 与 .titlebar 因 opacity/rgba 差异，由各 builder 自行定义，不在此处合并。
  * 严禁"顺手优化"任何属性值（配色、数值、顺序必须逐字等价）。
  */
-function getPopoutCommonCss() {
-    return `*{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;overflow:hidden;font-family:"Segoe UI","Microsoft YaHei UI",sans-serif;-webkit-font-smoothing:antialiased}
-.titlebar-title{
-    font-size:12px;font-weight:600;color:#333;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    max-width:200px;user-select:none;-webkit-user-select:none;
-}
-.titlebar-actions{display:flex;gap:4px;-webkit-app-region:no-drag}
-.tb-btn{
-    width:22px;height:22px;border:none;background:transparent;
-    color:#555;cursor:pointer;border-radius:4px;
-    display:flex;align-items:center;justify-content:center;
-    transition:all 0.18s ease;
-}
-.tb-btn:hover{background:rgba(0,0,0,0.08);color:#000}
-.tb-btn.close:hover{background:#FF453A;color:#FFFFFF}
-.tb-btn.pin.active{background:rgba(10,132,255,0.18);color:#0A84FF}`;
-}
+
 
 /**
  * 读取 overlay-logger.js 内容并缓存，供 popout 内联 HTML 注入。
  * popout 窗口使用 data: URL 加载，CSP 仅允许 'unsafe-inline'，无法 <script src> 外部文件，
  * 因此在主进程读取文件内容后作为内联 <script> 注入到 HTML 字符串中。
  */
-let _overlayLoggerScriptCache = null;
-function getOverlayLoggerScript() {
-    if (_overlayLoggerScriptCache) return _overlayLoggerScriptCache;
-    try {
-        let raw = fs.readFileSync(path.join(__dirname, 'overlay-logger.js'), 'utf8');
-        // 关键转义：把 </script> 替换成 <\/script>
-        // 原因：overlay-logger.js 的注释里含 "<script src=...></script>" 文本，
-        // 当本文件内容被内联到 buildPopoutHtml 的 <script> 标签时，
-        // HTML 解析器会把注释里的 </script> 当成真正的闭合标签，导致 script 提前结束，
-        // 后续源代码被当成 body 文本显示（用户看到"日志信息"），业务脚本不执行（无法关闭/输入）。
-        // 转义后 <\/script> 在 JS 运行时仍是 "</script>"，不影响代码逻辑。
-        raw = raw.replace(/<\/script>/gi, '<\\/script>');
-        _overlayLoggerScriptCache = raw;
-    } catch (e) {
-        _overlayLoggerScriptCache = '';
-        console.error('[main] 读取 overlay-logger.js 失败:', e.message);
-    }
-    return _overlayLoggerScriptCache;
-}
 
-function buildPopoutHtml(data) {
-    // 完整 HTML 转义（含 " ' &），防止 title/content 在属性或文本上下文注入 XSS
-    const title = escapeHtmlFull(data.title || '便签');
-    const content = escapeHtmlFull(data.content || '');
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>${title}</title>
-<style>
-${getPopoutCommonCss()}
-body{
-    background:rgba(250,250,252,0.78);
-    backdrop-filter:blur(20px) saturate(160%);
-    -webkit-backdrop-filter:blur(20px) saturate(160%);
-    border-radius:10px;
-    border:1px solid rgba(255,255,255,0.4);
-    box-shadow:0 8px 32px rgba(0,0,0,0.18);
-    display:flex;flex-direction:column;
-    -webkit-app-region:no-drag;
-}
-.titlebar{
-    height:32px;flex-shrink:0;
-    display:flex;align-items:center;justify-content:space-between;
-    padding:0 10px;
-    background:rgba(255,255,255,0.35);
-    border-bottom:1px solid rgba(0,0,0,0.06);
-    border-radius:10px 10px 0 0;
-    -webkit-app-region:drag;
-    cursor:move;
-}
-.content-wrap{flex:1;display:flex;min-height:0}
-textarea{
-    flex:1;width:100%;height:100%;
-    padding:12px 14px;border:none;outline:none;resize:none;
-    background:transparent;color:#1A1A1A;
-    font-size:14px;line-height:1.65;font-family:inherit;
-    user-select:text;-webkit-user-select:text;
-}
-textarea::placeholder{color:#999}
-.status-bar{
-    height:20px;flex-shrink:0;
-    padding:0 10px;
-    display:flex;align-items:center;justify-content:space-between;
-    background:rgba(255,255,255,0.3);
-    border-top:1px solid rgba(0,0,0,0.04);
-    border-radius:0 0 10px 10px;
-    font-size:10px;color:#888;
-    user-select:none;-webkit-user-select:none;
-}
-.status-tip{opacity:0.7}
-.status-saved{color:#34C759;font-weight:600;opacity:0;transition:opacity 0.3s}
-.status-saved.show{opacity:1}
-</style></head>
-<body>
-<div class="titlebar">
-    <div class="titlebar-title" title="${title}">📌 ${title}</div>
-    <div class="titlebar-actions">
-        <button class="tb-btn pin active" id="pinBtn" title="已置顶（点击取消置顶）"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.5-3V8a3.5 3.5 0 0 0-7 0v6L5 17z"/></svg></button>
-        <button class="tb-btn close" id="closeBtn" title="关闭并同步回主窗口"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    </div>
-</div>
-<div class="content-wrap">
-    <textarea id="content" placeholder="在此输入便签内容..." spellcheck="true">${content}</textarea>
-</div>
-<div class="status-bar">
-    <span class="status-tip">双击标题栏 = 缩回主窗口 · 默认置顶</span>
-    <span class="status-saved" id="savedTip">✓ 已同步</span>
-</div>
-<script>
-// 日志劫持：批量上报 popout 窗口日志（source='popout-note'），复用 overlay-logger.js 共享模块
-${getOverlayLoggerScript()}
-setupOverlayLogging({
-    source: 'popout-note',
-    reportApi: function(batch) { return window.popout.reportLogs(batch); },
-    errorPrefix: 'popout未捕获异常:'
-});
-// 安全模式：通过 preload 暴露的 window.popout API 与主进程通信
-// 不再直接 require('electron')，杜绝 RCE 风险
-const noteId = ${JSON.stringify(String(data.noteId))};
-const contentEl = document.getElementById('content');
-const savedTip = document.getElementById('savedTip');
-const closeBtn = document.getElementById('closeBtn');
-const pinBtn = document.getElementById('pinBtn');
-let debounceTimer = null;
-
-// 输入防抖同步给主窗口
-contentEl.addEventListener('input', () => {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-        window.popout.sendInput({ noteId, content: contentEl.value });
-        showSaved();
-    }, 400);
-});
-
-function showSaved() {
-    savedTip.classList.add('show');
-    setTimeout(() => savedTip.classList.remove('show'), 1200);
-}
-
-// 关闭按钮
-closeBtn.addEventListener('click', () => {
-    window.popout.sendInput({ noteId, content: contentEl.value });
-    window.popout.close();
-});
-
-// 置顶切换按钮
-pinBtn.addEventListener('click', async () => {
-    try {
-        const r = await window.popout.togglePin({ noteId, type: 'note' });
-        if (r && r.success) {
-            pinBtn.classList.toggle('active', r.pinned);
-            pinBtn.title = r.pinned ? '已置顶（点击取消置顶）' : '未置顶（点击置顶）';
-        }
-    } catch (_) {}
-});
-
-// 双击标题栏 = 关闭（缩回主窗口）
-document.querySelector('.titlebar').addEventListener('dblclick', () => {
-    window.popout.sendInput({ noteId, content: contentEl.value });
-    window.popout.close();
-});
-
-// 监听主进程推送的内容更新（主窗口内容变了会推送给小窗口）
-window.popout.onPush((data) => {
-    if (data && data.content !== undefined && data.content !== contentEl.value) {
-        contentEl.value = data.content;
-    }
-});
-
-// 监听主进程推送的置顶状态变化（外部 API 调用时同步 UI）
-window.popout.onPinChanged((data) => {
-    if (data && data.pinned !== undefined) {
-        pinBtn.classList.toggle('active', data.pinned);
-        pinBtn.title = data.pinned ? '已置顶（点击取消置顶）' : '未置顶（点击置顶）';
-    }
-});
-
-// Ctrl+Enter 也能关闭
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        window.popout.sendInput({ noteId, content: contentEl.value });
-        window.popout.close();
-    }
-});
-</script>
-</body></html>`;
-}
 
 /**
  * 构建待办事项小窗口的 HTML
@@ -936,8 +630,8 @@ document.addEventListener('keydown', (e) => {
  */
 function buildTodoPopoutHtml(data) {
     const title = escapeHtmlFull(data.title || '待办事项');
-    // 序列化 todos 为 JSON 字符串（安全）
-    const todosJson = JSON.stringify(data.todos || []);
+    // 序列化 todos 为 JSON 字符串（转义 </script> 防内联脚本 Breakout XSS）
+    const todosJson = JSON.stringify(data.todos || []).replace(/<\/script>/gi, '<\\/script>').replace(/<!--/g, '<\\!--');
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>${title}</title>
 <style>
 ${getPopoutCommonCss()}
@@ -1056,7 +750,6 @@ setupOverlayLogging({
     errorPrefix: 'popout未捕获异常:'
 });
 // 安全模式：通过 preload 暴露的 window.popout API 与主进程通信
-// 不再直接 require('electron')，杜绝 RCE 风险
 const noteId = ${JSON.stringify(String(data.noteId))};
 let todos = ${todosJson};
 let syncTimer = null;
@@ -1224,11 +917,6 @@ ipcMain.on('popout-note:input', (_event, data) => {
     try {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('popout-note:update', data);
-        }
-        // 同时把内容推送给所有同名小窗口（避免有多个时不同步，正常情况只有一个）
-        const win = popoutWindows.get(String(data.noteId));
-        if (win && !win.isDestroyed()) {
-            // 不回推给来源窗口避免死循环
         }
     } catch (_) {}
 });
@@ -1501,10 +1189,8 @@ let isSyncing = false;
 
 /* ==================== 通用工具函数 ==================== */
 
-// 去除字符串末尾的斜杠（统一处理 baseUrl 等场景）
-function trimTrailingSlash(s) {
-    return (s || '').trim().replace(/\/+$/, '');
-}
+// 去除字符串末尾的斜杠（统一处理 baseUrl 等场景），从 shared-utils 导入
+/* function trimTrailingSlash 已经在 shared-utils.js 中定义并导出 */
 
 // 同步凭据加解密（与 AI Key 一致的安全等级，避免明文落盘）
 // label 参数用于错误消息中区分凭据类型（默认 '凭据'，AI Key 场景传 'API Key'）
@@ -1596,23 +1282,7 @@ function sendHttpRequest(lib, opts, body) {
     });
 }
 
-// 统一从 HTTP 错误响应中提取可读信息（ai:generate / ai:chat 共用）
-async function extractHttpError(resp) {
-    let errMsg = 'HTTP ' + resp.status;
-    try {
-        const errJson = await resp.json();
-        if (errJson.error && errJson.error.message) {
-            errMsg += ': ' + errJson.error.message;
-        } else {
-            const text = await resp.text().catch(() => resp.statusText);
-            errMsg += ': ' + text;
-        }
-    } catch (_) {
-        const text = await resp.text().catch(() => '');
-        errMsg += ': ' + (text || resp.statusText);
-    }
-    return errMsg;
-}
+// extractHttpError 已提取到 main/httpUtils.js，便于单元测试
 
 // 包装 fetch：把底层网络错误转成用户能看懂的提示
 async function safeFetch(url, options) {
@@ -1856,110 +1526,9 @@ async function downloadS3Backup(config, key) {
     return Buffer.concat(chunks);
 }
 
-/**
- * 构造 WebDAV 请求的公共上下文（URL 解析 + auth + agent + lib 选择）
- * 5 个 WebDAV 函数共享此前置逻辑。在 Promise executor 内调用，
- * 若 URL 解析失败会 throw Error（被 Promise 自动捕获为 reject，等价于原 reject+return）。
- *
- * @param {Object} config - WebDAV 配置 { url, user, pass, allowSelfSigned }
- * @returns {{ baseUrl: string, auth: string, allowSelfSigned: boolean, urlObj: URL, lib: object, agent: object }}
- */
-function buildWebdavRequestContext(config) {
-    const baseUrl = trimTrailingSlash(config.url);
-    const auth = Buffer.from(config.user + ':' + config.pass).toString('base64');
-    const allowSelfSigned = !!(config.allowSelfSigned);
+// 重用 services/syncService.js 模块中导出的 WebDAV 工具函数，避免重复声明
 
-    let urlObj;
-    try {
-        urlObj = new URL(baseUrl);
-    } catch (e) {
-        throw new Error('WebDAV 地址格式错误：' + e.message);
-    }
-
-    const lib = urlObj.protocol === 'https:' ? https : http;
-    // 安全警告：http:// 明文协议下 Basic Auth 凭据会以明文经网络传输
-    if (urlObj.protocol === 'http:') {
-        console.warn('[安全警告] WebDAV 使用 http:// 明文协议，Basic Auth 凭据将以明文传输，建议改用 https://');
-    }
-    const agent = new lib.Agent({ rejectUnauthorized: !allowSelfSigned });
-
-    return { baseUrl, auth, allowSelfSigned, urlObj, lib, agent };
-}
-
-/**
- * WebDAV 公共请求函数：封装 buildWebdavRequestContext + http.request + agent 清理。
- * 替代 uploadToWebdav/testWebdavConnection 等函数中重复的 opts 构造与 agent.destroy 样板。
- *
- * @param {Object}  config    - WebDAV 配置（同 buildWebdavRequestContext）
- * @param {string}  method    - HTTP 方法（PUT/GET/DELETE/MKCOL/PROPFIND 等）
- * @param {string}  reqPath   - 已 encode 的请求路径
- * @param {Object}  [options]
- * @param {Object}  [options.headers] - 请求头
- * @param {string|Buffer} [options.body] - 请求体
- * @param {number}  [options.timeoutMs=30000] - 超时毫秒
- * @param {number}  [options.maxSize=0] - 响应体大小上限（0 表示不限制），超限会中断并 reject
- * @returns {Promise<{statusCode:number, statusMessage:string, headers:Object, body:Buffer}>}
- */
-function webdavRequest(config, method, reqPath, options) {
-    options = options || {};
-    const headers = options.headers || {};
-    const body = options.body || null;
-    const timeoutMs = options.timeoutMs || 30000;
-    const maxSize = options.maxSize || 0;
-    return new Promise((resolve, reject) => {
-        const ctx = buildWebdavRequestContext(config);
-        const opts = {
-            method: method,
-            hostname: ctx.urlObj.hostname,
-            port: ctx.urlObj.port || (ctx.urlObj.protocol === 'https:' ? 443 : 80),
-            path: reqPath,
-            headers: headers,
-            timeout: timeoutMs,
-            agent: ctx.agent,
-            rejectUnauthorized: !ctx.allowSelfSigned
-        };
-        const req = ctx.lib.request(opts, (res) => {
-            // 大小上限预检：Content-Length 超限直接拒绝，避免下载超大文件撑爆内存
-            if (maxSize > 0) {
-                const contentLength = parseInt(res.headers['content-length'] || '0', 10);
-                if (contentLength > maxSize) {
-                    try { ctx.agent.destroy(); } catch (_) {}
-                    try { req.destroy(); } catch (_) {}
-                    reject(new Error(`备份文件过大（${(contentLength / 1024 / 1024).toFixed(1)}MB），超过 ${(maxSize / 1024 / 1024).toFixed(0)}MB 上限`));
-                    return;
-                }
-            }
-            const chunks = [];
-            let totalSize = 0;
-            let aborted = false;
-            res.on('data', (c) => {
-                if (aborted) return;
-                totalSize += c.length;
-                // 累计大小超限即中断，防止服务器不返回 Content-Length 或谎报
-                if (maxSize > 0 && totalSize > maxSize) {
-                    aborted = true;
-                    try { ctx.agent.destroy(); } catch (_) {}
-                    try { req.destroy(); } catch (_) {}
-                    reject(new Error(`下载过程中超过 ${(maxSize / 1024 / 1024).toFixed(0)}MB 上限，已中断`));
-                    return;
-                }
-                chunks.push(c);
-            });
-            res.on('end', () => {
-                if (aborted) return;
-                try { ctx.agent.destroy(); } catch (_) {}
-                resolve({ statusCode: res.statusCode, statusMessage: res.statusMessage, headers: res.headers, body: Buffer.concat(chunks) });
-            });
-        });
-        req.on('timeout', () => { req.destroy(new Error('请求超时')); });
-        req.on('error', (err) => {
-            try { ctx.agent.destroy(); } catch (_) {}
-            reject(err);
-        });
-        if (body) req.write(body);
-        req.end();
-    });
-}
+// 重用 services/syncService.js 模块中导出的 webdavRequest 工具函数
 
 /**
  * WebDAV 上传（HTTP PUT + Basic Auth）
@@ -2112,23 +1681,24 @@ function listWebdavBackups(config) {
         // 注意：href 保留原始 encoded 形式（不 decode），直接用于后续 DELETE/GET 请求
         // 否则中文路径会因未 encode 导致 HTTP 400
         const items = [];
-        const responses = bodyStr.split(/<[^>]*:response>/i).slice(1);
-        for (const respBlock of responses) {
-            const hrefMatch = /<[^>]*:href[^>]*>([^<]+)<\/[^>]*:href>/i.exec(respBlock);
+        // 匹配任意 namespace 前缀或无前缀的 <...response> 到 </...response>
+        const responseBlocks = bodyStr.match(/<([^:>]+:)?response[\s>][\s\S]*?<\/([^:>]+:)?response>/gi) || [];
+        for (const respBlock of responseBlocks) {
+            const hrefMatch = /<([^:>]+:)?href[^>]*>([^<]+)<\/([^:>]+:)?href>/i.exec(respBlock);
             if (!hrefMatch) continue;
-            const href = hrefMatch[1];  // 保留原始 encoded 形式
+            const href = hrefMatch[2];  // 保留原始 encoded 形式
             // 检测 .zip 结尾时要考虑 encoded 后可能含 %2E 等情况，先 decode 再判断
             const decodedHref = decodeURIComponent(href);
             if (!decodedHref.endsWith('.zip')) continue;
             const name = decodedHref.split('/').pop();  // 显示用解码后的文件名
             if (!name) continue;
-            const sizeMatch = /<[^>]*:getcontentlength[^>]*>([^<]+)<\/[^>]*:getcontentlength>/i.exec(respBlock);
-            const modMatch = /<[^>]*:getlastmodified[^>]*>([^<]+)<\/[^>]*:getlastmodified>/i.exec(respBlock);
+            const sizeMatch = /<([^:>]+:)?getcontentlength[^>]*>([^<]+)<\/([^:>]+:)?getcontentlength>/i.exec(respBlock);
+            const modMatch = /<([^:>]+:)?getlastmodified[^>]*>([^<]+)<\/([^:>]+:)?getlastmodified>/i.exec(respBlock);
             items.push({
                 name: name,         // 解码后的文件名（仅用于显示）
                 href: href,         // 原始 encoded 形式（用于 DELETE/GET）
-                size: sizeMatch ? parseInt(sizeMatch[1], 10) || 0 : 0,
-                lastModified: modMatch ? modMatch[1] : ''
+                size: sizeMatch ? parseInt(sizeMatch[2], 10) || 0 : 0,
+                lastModified: modMatch ? modMatch[2] : ''
             });
         }
         // 按修改时间倒序
@@ -2507,7 +2077,8 @@ ipcMain.handle('sync:restore-backup', tryWrap(async (_event, providerKey, fileId
         if (!baseName) { continue; }  // 跳过纯目录条目
         // 安全：禁止恢复 settings.json，防止恶意备份覆盖 PIN 哈希/同步凭据/API Key
         // settings.json 含 lockHash/lockSalt/syncConfig/aiConfig，被替换后 PIN 锁失效、数据流向攻击者
-        if (baseName === 'settings.json') continue;
+        // 修复：Windows 文件系统大小写不敏感，攻击者可用 Settings.json 绕过校验覆盖 settings.json
+        if (baseName.toLowerCase() === 'settings.json') continue;
         const targetPath = path.join(userDataDir, baseName);
         fs.writeFileSync(targetPath, entry.getData());
         restoredCount++;
@@ -2729,13 +2300,15 @@ ipcMain.handle('lock:has-pin', () => {
 });
 
 // 清除 PIN（修改 PIN 时先清除再设置，或遗忘时手动清空 settings.json）
-ipcMain.handle('lock:clear-pin', () => {
+// 修复：原实现 persistSettings() 未 await，落盘失败时内存已删 lockHash 但磁盘保留，
+// 重启后 PIN 重新出现，用户以为已清除却仍被锁定
+ipcMain.handle('lock:clear-pin', async () => {
     const s = loadSettings();
     delete s.lockHash;
     delete s.lockSalt;
     delete s.lockFailCount;
     delete s.lockCooldownUntil;
-    persistSettings();
+    await persistSettings();
     lockFailCount = 0;
     lockCooldownUntil = 0;
     lockStateLoaded = true;
@@ -2791,8 +2364,13 @@ ipcMain.handle('chat:export-markdown', tryWrap(async (_event, { title, content }
     if (result.canceled || !result.filePath) {
         return { success: false, canceled: true };
     }
-    fs.writeFileSync(result.filePath, content || '', 'utf8');
-    return { success: true, filePath: result.filePath };
+    // 路径规范化与合法性校验：确保导出路径为绝对路径
+    const normalizedPath = path.normalize(result.filePath);
+    if (!path.isAbsolute(normalizedPath)) {
+        return { success: false, error: '无效的文件保存路径' };
+    }
+    fs.writeFileSync(normalizedPath, content || '', 'utf8');
+    return { success: true, filePath: normalizedPath };
 }));
 
 /* ==================== 剪贴板：写入文本 ============================ */
@@ -3356,124 +2934,7 @@ ipcMain.handle('chat:abort', () => {
     return false;
 });
 
-/* ==================== AI 翻译（文本） ====================
- * 复用 ai:chat 的多模态能力，但使用固定的系统提示词，非流式输出。
- * 文本翻译：ai:translate(text, targetLang)
- * ============================================================ */
-
-// 目标语言代码 → 语言名称映射（用于动态构建系统提示词）
-const TRANSLATE_LANG_MAP = {
-    zh: '简体中文',
-    en: '英文（English）',
-    ja: '日文（日本語）',
-    fr: '法文（Français）',
-    de: '德文（Deutsch）',
-    pt: '葡萄牙文（Português）',
-    ar: '阿拉伯文（العربية）',
-    es: '西班牙文（Español）',
-};
-
-/**
- * 根据目标语言代码构建翻译系统提示词
- * @param {string} langCode - 语言代码（zh/en/ja/fr/de/pt/ar/es），默认 zh
- * @returns {string} 系统提示词
- */
-function buildTranslatePrompt(langCode, hasImages) {
-    const langName = TRANSLATE_LANG_MAP[langCode] || TRANSLATE_LANG_MAP.zh;
-    let prompt = '你是一个资深的 IT 翻译专家，请把用户输入的内容翻译为通俗易懂的' + langName +
-        '，保持代码和专有名词的原意。如果内容已经是目标语言，请直接润色输出。只输出翻译结果，不要解释。';
-    if (hasImages) {
-        prompt += ' 用户可能传入图片，请识别图片中的文字（OCR）并翻译为' + langName +
-            '。如果图片中无可识别文字，请简要描述图片内容并翻译。';
-    }
-    return prompt;
-}
-
-// 构建翻译 user 消息 content：有图时返回 OpenAI Vision parts 数组，无图时返回纯字符串
-function buildTranslateUserContent(text, images) {
-    if (!Array.isArray(images) || images.length === 0) {
-        return String(text);
-    }
-    const parts = [];
-    if (text && String(text).trim()) {
-        parts.push({ type: 'text', text: String(text) });
-    }
-    images.forEach(img => {
-        if (!img) return;
-        // 复用聊天图片读取逻辑：前端只传 path，主进程读回 base64 dataUrl
-        let url = img.dataUrl;
-        if (!url && img.path) {
-            url = readChatImageAsDataUrl(img.path);
-        }
-        if (url) parts.push({ type: 'image_url', image_url: { url: url } });
-    });
-    // 若 parts 为空（图片读取失败且无文本），兜底返回空文本
-    return parts.length > 0 ? parts : [{ type: 'text', text: '' }];
-}
-
-// 文本翻译：非流式，直接返回译文。支持 targetLang 参数选择目标语言。
-// 支持单图 OCR 翻译：第 3 个参数 images 为数组，元素 {path} 或 {dataUrl}
-ipcMain.handle('ai:translate', async (_event, text, targetLang, images) => {
-    assertPayloadSize(text, MAX_IPC_PAYLOAD_SIZE, 'ai:translate 入参');
-    const s = loadSettings();
-    const cfg = s.aiConfig || {};
-    if (!cfg.baseUrl || !cfg.model) throw new Error('AI 配置不完整，请先在 AI 设置中配置');
-    validateAiBaseUrl(cfg.baseUrl, 'AI API 地址');
-    return await withDecryptedKey(() => decryptSecret(cfg.encryptedKey, 'API Key'), async (apiKey) => {
-        if (!apiKey) throw new Error('API Key 未配置');
-        const hasImages = Array.isArray(images) && images.length > 0;
-        if ((!text || !String(text).trim()) && !hasImages) throw new Error('请输入要翻译的内容');
-        // 根据目标语言动态构建提示词（有图时附加 OCR 指令）
-        const systemPrompt = buildTranslatePrompt(targetLang || 'zh', hasImages);
-        const url = trimTrailingSlash(cfg.baseUrl) + '/chat/completions';
-        // 有图时 user content 为 parts 数组（OpenAI Vision 格式），无图时为纯字符串
-        const userContent = buildTranslateUserContent(text || '', images);
-        const messages = [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userContent }
-        ];
-        const resp = await safeFetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-            body: JSON.stringify({
-                model: cfg.model,
-                messages: messages,
-                temperature: Math.min(cfg.temperature ?? 0.3, 0.5),  // 翻译用低温度保证稳定
-            }),
-            signal: AbortSignal.timeout(60000),
-        });
-        if (!resp.ok) throw new Error(await extractHttpError(resp));
-        const data = await resp.json();
-        return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-    });
-});
-
-// 窗口透明度
-ipcMain.handle('window:set-opacity', (_event, val) => {
-    if (!mainWindow) return;
-    // 数值校验：防 NaN/字符串导致 setOpacity 行为未定义
-    if (typeof val !== 'number' || !Number.isFinite(val)) return;
-    const opacity = Math.max(0.2, Math.min(1, val));
-    mainWindow.setOpacity(opacity);
-    const s = loadSettings();
-    s.opacity = opacity;
-    persistSettings();
-    return opacity;
-});
-ipcMain.handle('window:get-opacity', () => {
-    const s = loadSettings();
-    return s.opacity ?? 1;
-});
-
-// 选择文件夹
-ipcMain.handle('select-folder', async () => {
-    if (!mainWindow) return null;
-    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-    if (!result.canceled && result.filePaths.length > 0) {
-        return result.filePaths[0];
-    }
-    return null;
-});
+registerSystemIpc({ getMainWindow: () => mainWindow, loadSettings, persistSettings });
 
 // 保存自定义图片尺寸（自动保存，不加入推荐列表）
 ipcMain.handle('ai:save-custom-size', (_event, size) => {
@@ -3522,7 +2983,7 @@ ipcMain.handle('ai:save-image-config', async (_event, config) => {
         if (config.model !== undefined) s.aiConfig.imageModel = config.model || 'dall-e-3';
         if (config.size !== undefined) s.aiConfig.imageSize = config.size || '1024x1024';
     }
-    // 保存路径统一存储到 imageSavePath（图片/视频/TTS 三模块共用同一保存路径）
+    // 保存路径统一存储到 imageSavePath（图片/视频共用同一保存路径）
     // 同时同步到 dashscopeSavePath 以兼容旧版配置读取逻辑
     if (config.savePath !== undefined) {
         s.aiConfig.imageSavePath = config.savePath;
@@ -3550,7 +3011,7 @@ ipcMain.handle('ai:load-image-config', async () => {
     try { dashscopeKey = maskCred(await decryptSecret(cfg.dashscopeEncryptedKey, 'API Key')); } catch (_) {}
     try { imageKey = maskCred(await decryptSecret(cfg.imageEncryptedKey, 'API Key')); } catch (_) {}
     try { videoKey = maskCred(await decryptSecret(cfg.dashscopeVideoEncryptedKey, 'API Key')); } catch (_) {}
-    // 保存路径统一使用 imageSavePath（图片/视频/TTS 三模块共用）
+    // 保存路径统一使用 imageSavePath（图片/视频共用）
     // fallback 到 dashscopeSavePath 仅为兼容老版本配置数据
     const unifiedSavePath = cfg.imageSavePath || cfg.dashscopeSavePath || '';
     if (provider === 'dashscope') {
@@ -3581,68 +3042,15 @@ ipcMain.handle('ai:load-image-config', async () => {
     };
 });
 
-/* ==================== TTS 语音配置存取 ====================
+/* ==================== 图片/视频配置存取 ====================
  * 严格复用 encryptSecret / maskCred / isMaskedCred 三件套，
  * 与图片/视频配置存取模式完全一致：掩码占位时保留旧密钥，避免掩码字符串被当真实密钥加密落盘。
- * 三级 Key fallback：ttsEncryptedKey → dashscopeEncryptedKey → encryptedKey(聊天)
- *   老配置（已有图片或聊天百炼 Key）零改动即可使用 TTS，无需重复填写。
  * ================================================================== */
-
-// 保存 TTS 配置（API Key 加密落盘；掩码占位时保留旧密钥）
-ipcMain.handle('tts:save-config', async (_event, config) => {
-    const s = loadSettings();
-    if (!s.aiConfig) s.aiConfig = {};
-    const cfg = s.aiConfig;
-    // 仅当字段被显式传入（非 undefined）时才写入，避免部分保存清空其他字段
-    // SSRF 防护：校验 TTS API 地址协议
-    if (config.baseUrl !== undefined) {
-        validateAiBaseUrl(config.baseUrl, 'TTS API 地址');
-        cfg.ttsBaseUrl = config.baseUrl;
-    }
-    if (config.apiKey !== undefined) {
-        // 掩码占位时保留已保存的加密值，避免掩码字符串被当真实密钥加密落盘
-        cfg.ttsEncryptedKey = isMaskedCred(config.apiKey) ? cfg.ttsEncryptedKey : await encryptSecret(config.apiKey, 'API Key');
-    }
-    if (config.model !== undefined) cfg.ttsModel = config.model || 'cosyvoice-v1';
-    if (config.voice !== undefined) cfg.ttsVoice = config.voice || '';
-    if (config.format !== undefined) cfg.ttsFormat = config.format || 'mp3';
-    if (config.sampleRate !== undefined) cfg.ttsSampleRate = config.sampleRate || 22050;
-    // 自定义音色列表：保留字段以兼容旧配置数据（克隆功能已下线，不再写入新数据）
-    if (config.customVoices !== undefined) cfg.ttsCustomVoices = config.customVoices || [];
-    return persistSettings();
-});
-
-// 加载 TTS 配置（apiKey 掩码化回传，避免明文进入渲染进程）
-// 三级 Key fallback：优先解密 tts 专用 Key，失败/为空则 fallback 到图片百炼 Key，再 fallback 到聊天 Key
-ipcMain.handle('tts:load-config', async () => {
-    const s = loadSettings();
-    const cfg = s.aiConfig || {};
-    let ttsKey = '';
-    try {
-        // 三级 fallback 解密：tts 专用 → 图片共用百炼 → 聊天通用
-        let raw = await decryptSecret(cfg.ttsEncryptedKey, 'API Key');
-        if (!raw) raw = await decryptSecret(cfg.dashscopeEncryptedKey, 'API Key');
-        if (!raw) raw = await decryptSecret(cfg.encryptedKey, 'API Key');
-        ttsKey = maskCred(raw);
-    } catch (e) {
-        // 解密失败（safeStorage 不可用等）：返回空，前端提示用户重新输入
-        console.error('加载 TTS API Key 失败:', e.message);
-    }
-    return {
-        baseUrl: cfg.ttsBaseUrl || 'https://dashscope.aliyuncs.com',
-        apiKey: ttsKey,
-        model: cfg.ttsModel || 'cosyvoice-v1',
-        voice: cfg.ttsVoice || '',
-        format: cfg.ttsFormat || 'mp3',
-        sampleRate: cfg.ttsSampleRate || 22050,
-        customVoices: cfg.ttsCustomVoices || [],
-    };
-});
 
 // 自动保存图片到磁盘
 function saveImageToDisk(dataUrl, cfg) {
     try {
-        // 保存路径统一使用 imageSavePath（图片/视频/TTS 三模块共用），fallback 兼容老配置
+        // 保存路径统一使用 imageSavePath（图片/视频共用），fallback 兼容老配置
         const saveDir = (cfg && (cfg.imageSavePath || cfg.dashscopeSavePath)) || app.getPath('userData');
         if (!fs.existsSync(saveDir)) { fs.mkdirSync(saveDir, { recursive: true }); }
         const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
@@ -3661,6 +3069,11 @@ function saveImageToDisk(dataUrl, cfg) {
 // 注意：本函数不包含 SSRF 校验（错误消息因调用点不同而异），调用方需在调用前自行校验 URL
 async function fetchImageAsDataUrl(url, cfg) {
     const imgResp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    // 修复：原实现未校验 resp.ok，错误响应（403/404/500 等）的 HTML/JSON
+    // 会被 Base64 编码后当成图片数据返回，产生损坏的 dataUrl 并可能泄露错误页内部信息
+    if (!imgResp.ok) {
+        throw new Error('图片下载失败 HTTP ' + imgResp.status + ': ' + imgResp.statusText);
+    }
     const imgBuf = await imgResp.arrayBuffer();
     const dataUrl = 'data:image/png;base64,' + Buffer.from(imgBuf).toString('base64');
     saveImageToDisk(dataUrl, cfg);
@@ -3778,8 +3191,10 @@ async function dashscopeGenerate(baseUrl, apiKey, model, prompt, size, imageData
 
 /**
  * 下载视频 URL 并保存到本地磁盘，返回本地文件路径。
- * 保存目录统一使用 imageSavePath（图片/视频/TTS 三模块共用同一保存路径）
+ * 保存目录统一使用 imageSavePath（图片/视频共用同一保存路径）
  * fallback 到 dashscopeSavePath 仅为兼容老版本配置数据
+ * 流式下载核心逻辑提取到 main/downloadUtils.js 的 streamDownloadToFile，
+ * 该函数已通过单元测试验证（包括磁盘写入失败时正确 reject 而非挂起）。
  * @param {string} videoUrl - 视频下载地址
  * @param {object} cfg - AI 配置对象
  * @returns {Promise<string>} 本地视频文件绝对路径
@@ -3789,200 +3204,22 @@ async function saveVideoToDisk(videoUrl, cfg) {
     if (!isSafeExternalUrl(videoUrl)) {
         throw new Error('视频下载地址不安全（需 https 外网地址），已拒绝下载');
     }
-    // 保存路径统一使用 imageSavePath（与图片/TTS 共用），不再单独读取 videoSavePath
+    // 保存路径统一使用 imageSavePath，不再单独读取 videoSavePath
     const saveDir = (cfg && (cfg.imageSavePath || cfg.dashscopeSavePath)) || app.getPath('userData');
     if (!fs.existsSync(saveDir)) { fs.mkdirSync(saveDir, { recursive: true }); }
     const fileName = 'ai_video_' + Date.now() + '.mp4';
     const filePath = path.join(saveDir, fileName);
-    // 流式下载到磁盘：避免一次性把整段视频读进内存导致 OOM（几百 MB 视频会让 Node 崩溃）
-    const resp = await fetch(videoUrl, { signal: AbortSignal.timeout(120000) });
-    if (!resp.ok) {
-        throw new Error('下载视频失败 HTTP ' + resp.status + ': ' + resp.statusText);
-    }
-    if (!resp.body) {
-        // 兜底：环境不支持流式读取时退回一次性 Buffer
-        const buf = Buffer.from(await resp.arrayBuffer());
-        fs.writeFileSync(filePath, buf);
-        console.log('视频已保存:', path.basename(filePath));
-        return filePath;
-    }
-    const fileStream = fs.createWriteStream(filePath);
-    const reader = resp.body.getReader();
+    // 修复：下载失败（超时/网络中断/磁盘满）时删除残留的部分写入文件，避免磁盘累积损坏 mp4
     try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            fileStream.write(Buffer.from(value));
-        }
-    } finally {
-        fileStream.end();
-        await new Promise((resolve) => fileStream.on('finish', resolve));
+        // 流式下载到磁盘：使用经单元测试验证的 streamDownloadToFile
+        // 120 秒超时与原实现保持一致（视频文件可能较大）
+        await streamDownloadToFile(videoUrl, filePath, { timeout: 120000 });
+    } catch (err) {
+        try { await fs.promises.unlink(filePath); } catch (_) {}
+        throw err;
     }
-    console.log('视频已保存到:', filePath);
+    console.log('视频已保存:', path.basename(filePath));
     return filePath;
-}
-
-/* ==================== TTS 语音合成 Service（百炼 CosyVoice）====================
- * 与图片/视频生成同构：原生 fetch + SSRF https 校验 + 错误码统一处理。
- * 合成模式：HTTP 同步合成（v1），返回音频 URL 或 base64，主进程统一落盘到 tts_cache。
- * 情感控制（Director Mode）：通过 parameters.instruct 字段实现（严格遵循官方 model+input+parameters 三层结构）。
- * 声音复刻：先上传音频到百炼临时存储拿 oss:// URL，再调注册接口拿 voice_id。
- * 严格不引入第三方 SDK，全部原生 fetch + Node 内置模块。
- * ============================================================================= */
-
-// TTS 单次合成文本长度上限（百炼单次请求限制 + IPC payload 约束）
-const TTS_TEXT_MAX_LENGTH = 1000;
-// TTS HTTP 请求超时（合成通常 3-10 秒，给 60 秒余量）
-const TTS_REQUEST_TIMEOUT_MS = 60000;
-
-/**
- * 构建百炼 TTS HTTP 请求 URL。
- * 铁血纪律：new URL().origin 只取 scheme://host[:port]，用户输入的任何 path（如 /compatible-mode/v1）统统剥离。
- * @param {string} baseUrl - 用户配置的百炼 API 地址（可能带 path）
- * @param {string} apiPath - 官方标准路径 /api/v1/services/aigc/text2audio/generation
- * @returns {string} 完整请求 URL（origin + apiPath）
- */
-function buildTtsUrl(baseUrl, apiPath) {
-    let origin = baseUrl || 'https://dashscope.aliyuncs.com';
-    try {
-        const u = new URL(origin);
-        origin = u.origin;  // 只取 scheme://host[:port]，丢弃任何 path
-    } catch (e) {
-        throw new Error('百炼 TTS API 地址格式错误：' + e.message);
-    }
-    return origin + apiPath;
-}
-
-/**
- * 阿里云百炼文本转语音（HTTP 同步合成，非实时）。
- * 官方 Endpoint: POST https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer
- * 适用于 CosyVoice 系列 + Qwen-Audio-TTS 系列（共用同一 endpoint，请求体结构相同）。
- * 请求体结构: { model, input:{ text, voice, format, sample_rate, instruction? } }
- *   —— voice/format/sample_rate 全部放在 input 内，无 parameters 对象（实测确认）
- * @param {string} baseUrl - 百炼 API 地址
- * @param {string} apiKey - 明文 API Key（由 withDecryptedKey 解密后传入）
- * @param {string} model - 模型名（cosyvoice-v1 / qwen-audio-3.0-tts-plus / qwen-audio-3.0-tts-flash 等）
- * @param {string} voice - 音色 id（必须与模型严格匹配，否则报 411 Engine error；留空则按模型自动匹配默认音色）
- * @param {string} text - 待合成文本
- * @param {string} [instruct] - 情感指令（cosyvoice 用 input.instruction；qwen-audio 不支持，自动跳过）
- * @param {string} [format='mp3'] - 输出音频格式
- * @returns {Promise<{url: string, durationMs?: number}>} ttsfile:// 本地路径
- */
-async function dashscopeTts(baseUrl, apiKey, model, voice, text, instruct, format) {
-    // 入参校验
-    if (!apiKey) throw new Error('API Key 未配置');
-    if (!text || !text.trim()) throw new Error('待合成文本不能为空');
-    if (text.length > TTS_TEXT_MAX_LENGTH) {
-        throw new Error('文本过长（超过 ' + TTS_TEXT_MAX_LENGTH + ' 字上限），请缩短后重试');
-    }
-    const useModel = model || 'cosyvoice-v1';
-    const useFormat = (format || 'mp3').toLowerCase();
-
-    // 默认音色按精确模型区分（音色与模型必须严格匹配，否则报 411 Engine error）
-    // qwen-audio-3.0-tts-plus → longanlingxin（旗舰音色）
-    // qwen-audio-3.0-tts-flash → longanhuan_v3.6（精品中文音色）
-    // cosyvoice 系列 → longxiaochun
-    // 注意：模型名匹配使用小写比较（用户可能在设置中输入不同大小写），但 useModel 原值传给 API
-    let useVoice = voice || '';
-    if (!useVoice) {
-        const modelLower = useModel.toLowerCase();
-        if (modelLower === 'qwen-audio-3.0-tts-plus') {
-            useVoice = 'longanlingxin';
-        } else if (modelLower === 'qwen-audio-3.0-tts-flash') {
-            useVoice = 'longanhuan_v3.6';
-        } else if (modelLower.indexOf('qwen-audio') === 0) {
-            // 兜底：未知 qwen-audio 变体按 flash 默认音色处理
-            useVoice = 'longanhuan_v3.6';
-        } else {
-            useVoice = 'longxiaochun';
-        }
-    }
-
-    // 官方 HTTP 端点路径（实测确认：text2audio/generation 会报 url error，SpeechSynthesizer 才是正确路径）
-    const reqUrl = buildTtsUrl(baseUrl, '/api/v1/services/audio/tts/SpeechSynthesizer');
-    // SSRF 校验：必须 https
-    try {
-        const u = new URL(reqUrl);
-        if (u.protocol !== 'https:') throw new Error('仅支持 https 协议');
-    } catch (e) {
-        throw new Error('百炼 TTS API 地址不安全：' + e.message);
-    }
-
-    // 防呆日志 —— fetch 前打印最终 URL 和模型/音色，方便排查
-    console.info('[TTS] 最终请求 URL:', reqUrl, '| model:', useModel, '| voice:', useVoice);
-
-    // 请求体：所有字段放在 input 内（实测确认无 parameters 对象）
-    const input = {
-        text: text,
-        voice: useVoice,
-        format: useFormat,
-        sample_rate: 22050
-    };
-    // 情感指令：仅 cosyvoice 系列支持 input.instruction；qwen-audio 系列不支持，跳过避免报错
-    if (instruct && instruct.trim() && useModel.indexOf('qwen-audio') !== 0) {
-        input.instruction = instruct.trim();
-    }
-    const body = { model: useModel, input: input };
-
-    const resp = await fetch(reqUrl, {
-        method: 'POST',
-        headers: {
-            'Authorization': 'Bearer ' + apiKey,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(TTS_REQUEST_TIMEOUT_MS)
-    });
-
-    if (!resp.ok) {
-        const errText = await resp.text().catch(() => '');
-        throw new Error('百炼 TTS 请求失败 HTTP ' + resp.status + ': ' + (errText || resp.statusText).slice(0, 500));
-    }
-    const data = await resp.json();
-
-    // 错误码检查（百炼同步返回的错误格式）
-    if (data.code) {
-        throw new Error('百炼 TTS 错误 [' + data.code + ']: ' + (data.message || '未知错误'));
-    }
-
-    // 解析音频：百炼返回两种格式
-    //  1) output.audio.url → 公网 URL（可能是 http://，需升级为 https:// 再过 SSRF 校验），需下载
-    //  2) output.audio → data:audio/mpeg;base64,xxx dataURL
-    let audioBuffer = null;
-    let ext = useFormat;
-
-    const audioField = data.output && data.output.audio;
-    if (typeof audioField === 'string' && audioField.startsWith('data:audio/')) {
-        // 格式 2：直接 base64 dataURL
-        const m = /^data:audio\/(\w+);base64,/.exec(audioField);
-        if (m) ext = m[1] === 'mpeg' ? 'mp3' : m[1];
-        const base64Data = audioField.replace(/^data:audio\/\w+;base64,/, '');
-        audioBuffer = Buffer.from(base64Data, 'base64');
-    } else if (audioField && typeof audioField.url === 'string') {
-        // 格式 1：公网 URL，下载（复用 SSRF 校验）
-        // 百炼 OSS 返回的 URL 可能是 http://，升级为 https:// 再校验（阿里云 OSS 支持 https）
-        let audioUrl = audioField.url;
-        if (audioUrl.indexOf('http://') === 0) audioUrl = 'https://' + audioUrl.slice(7);
-        if (!isSafeExternalUrl(audioUrl)) {
-            throw new Error('百炼返回的音频地址不安全（需 https 外网地址），已拒绝下载');
-        }
-        const dlResp = await fetch(audioUrl, { signal: AbortSignal.timeout(TTS_REQUEST_TIMEOUT_MS) });
-        if (!dlResp.ok) {
-            throw new Error('下载合成音频失败 HTTP ' + dlResp.status + ': ' + dlResp.statusText);
-        }
-        audioBuffer = Buffer.from(await dlResp.arrayBuffer());
-    } else {
-        throw new Error('百炼 TTS 未返回音频数据：' + JSON.stringify(data).slice(0, 500));
-    }
-
-    if (!audioBuffer || audioBuffer.length === 0) {
-        throw new Error('百炼 TTS 返回的音频数据为空');
-    }
-
-    // 落盘到 tts_cache，返回 ttsfile:// URL
-    const ttsUrl = await saveAudioToTtsCache(audioBuffer, ext);
-    return { url: ttsUrl, durationMs: data.output && data.output.duration_ms };
 }
 
 /**
@@ -4349,126 +3586,8 @@ ipcMain.handle('ai:generate-video', async (_event, params) => {
     }
 });
 
-/* ==================== TTS 语音工坊：合成业务 IPC ====================
- * 设计：主进程负责所有百炼 HTTP 请求与音频落盘；渲染进程只管 UI 与 <audio> 播放。
- * 音频通过自定义 ttsfile:// 协议加载（非 file://，非 base64），符合 CSP 与最小传输约束。
- * API Key 加密落盘 + 掩码回传，复用现有 encryptApiKey/maskCred/isMaskedCred 三件套。
- * ============================================================================= */
-
-// TTS 合成防重入标志（避免快速连续点击导致任务堆叠、配额浪费）
-let ttsSynthesizing = false;
-
-// ===== TTS 业务 IPC Handler =====
-
-// 1. 文本→语音合成（核心 handler，涉网 + 涉密钥）
-ipcMain.handle('tts:synthesize', tryWrap(async (_event, params) => {
-    assertPayloadSize(params, MAX_IPC_PAYLOAD_SIZE, 'tts:synthesize 入参');
-    // 防重入：合成耗时 3-10 秒，快速连续点击会导致任务堆叠、配额浪费
-    if (ttsSynthesizing) {
-        throw new Error('上一次语音合成仍在进行中，请等待完成后再试');
-    }
-    ttsSynthesizing = true;
-    try {
-        const s = loadSettings();
-        const cfg = s.aiConfig || {};
-        // baseUrl 三级 fallback：tts 专用 → 图片共用百炼 → 官方默认
-        const baseUrl = cfg.ttsBaseUrl || cfg.dashscopeBaseUrl || 'https://dashscope.aliyuncs.com';
-        validateAiBaseUrl(baseUrl, 'TTS API 地址');
-
-        return await withDecryptedKey(async () => {
-            // key 三级 fallback：tts 专用 → 图片共用百炼 → 聊天通用
-            let k = await decryptSecret(cfg.ttsEncryptedKey, 'API Key');
-            if (!k) k = await decryptSecret(cfg.dashscopeEncryptedKey, 'API Key');
-            if (!k) k = await decryptSecret(cfg.encryptedKey, 'API Key');
-            return k;
-        }, async (apiKey) => {
-            if (!baseUrl) throw new Error('百炼 TTS API 地址未配置');
-            if (!apiKey) throw new Error('API Key 未配置，请在设置面板的语音模型配置中填写');
-
-            const text = params.text || '';
-            // 项目硬约束：TTS 文本上限 1000 字符，防超长文本导致合成超时/配额浪费
-            if (text.length > 1000) throw new Error('TTS 文本超出 1000 字符限制（当前 ' + text.length + ' 字符）');
-            // 音色：仅使用渲染进程传入的 voice，不回退到 cfg.ttsVoice
-            // 原因：cfg.ttsVoice 可能在用户切换模型后变为过期值（旧模型音色与新模型不匹配），回退会导致 411 Engine error
-            // 渲染进程已实现音色持久化（防抖保存 + initTtsVoiceSelect 恢复），voice 始终与当前模型匹配
-            const voice = params.voice || '';
-            // 模型 cosyvoice-v1，情感控制通过 parameters.instruct 字段实现
-            let model = params.model || cfg.ttsModel || 'cosyvoice-v1';
-            const instruct = params.instruct || '';
-            const format = params.format || cfg.ttsFormat || 'mp3';
-
-            // 调百炼 TTS Service（SSRF 校验 + fetch + 落盘）
-            const result = await dashscopeTts(baseUrl, apiKey, model, voice, text, instruct, format);
-            // 合成成功后自动保存音频到统一保存路径（图片/视频/TTS 共用 imageSavePath）
-            try {
-                const saveDir = (cfg.imageSavePath || cfg.dashscopeSavePath) || '';
-                if (saveDir) {
-                    // 从 ttsfile:// URL 解析本地文件路径
-                    const ttsUrl = new URL(result.url);
-                    const cacheDir = getTtsCacheDir();
-                    const cacheFile = decodeURIComponent(ttsUrl.pathname.slice(1));
-                    const srcPath = path.join(cacheDir, cacheFile);
-                    if (fs.existsSync(srcPath)) {
-                        if (!fs.existsSync(saveDir)) { fs.mkdirSync(saveDir, { recursive: true }); }
-                        const ext = path.extname(cacheFile) || '.mp3';
-                        const autoName = 'tts_' + Date.now() + ext;
-                        fs.copyFileSync(srcPath, path.join(saveDir, autoName));
-                        console.log('[TTS] 音频已自动保存到:', path.join(saveDir, autoName));
-                    }
-                }
-            } catch (autoErr) {
-                // 自动保存失败不影响主流程（缓存里已有，用户可手动下载）
-                console.warn('[TTS] 自动保存音频失败:', autoErr.message);
-            }
-            return { success: true, url: result.url, durationMs: result.durationMs };
-        });
-    } finally {
-        ttsSynthesizing = false;
-        // apiKey 清理交给 withDecryptedKey 出作用域 GC
-    }
-}));
-
-// 2. 手动触发缓存清理（不涉网，调 cleanTtsCache）
-ipcMain.handle('tts:cleanup-cache', tryWrap(async () => {
-    const result = await cleanTtsCache();
-    return { success: true, deleted: result.deleted };
-}));
-
-// 下载音频文件 —— 用 dialog.showSaveDialog 替代 <a download> blob（CSP 严格时 blob download 不可靠）
-// 复用 chat:export-markdown 的模式：主进程弹保存对话框 + 同步落盘
-ipcMain.handle('tts:save-audio', tryWrap(async (_event, { ttsUrl, suggestedName }) => {
-    if (!ttsUrl || typeof ttsUrl !== 'string') throw new Error('音频 URL 无效');
-    // 从 ttsfile:// URL 解析本地文件路径（与 ttsfile protocol handler 同款校验）
-    const url = new URL(ttsUrl);
-    const dir = getTtsCacheDir();
-    const fileName = decodeURIComponent(url.pathname.slice(1));
-    const filePath = path.normalize(path.join(dir, fileName));
-    // 路径穿越防护
-    if (filePath !== dir && !filePath.startsWith(dir + path.sep)) {
-        throw new Error('音频文件路径非法');
-    }
-    if (!fs.existsSync(filePath)) throw new Error('音频文件不存在，可能已被缓存清理');
-    // 弹保存对话框
-    const ext = path.extname(filePath).slice(1) || 'mp3';
-    const safeName = (suggestedName || 'tts_audio').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
-    const result = await dialog.showSaveDialog({
-        title: '保存语音文件',
-        defaultPath: safeName + '_' + Date.now() + '.' + ext,
-        filters: [
-            { name: '音频文件', extensions: [ext] },
-            { name: '所有文件', extensions: ['*'] }
-        ]
-    });
-    if (result.canceled || !result.filePath) {
-        return { success: false, canceled: true };
-    }
-    // 同步复制文件到用户选择的路径
-    fs.copyFileSync(filePath, result.filePath);
-    return { success: true, path: result.filePath };
-}));
-
 /* ==================== 音乐模块 IPC Handler（V7.4 P0 骨架）====================
- * 设计与 TTS 同构：tryWrap 统一异常捕获，主进程负责文件 I/O，渲染进程零 base64 内存占用。
+ * 设计：tryWrap 统一异常捕获，主进程负责文件 I/O，渲染进程零 base64 内存占用。
  * P0 阶段实现：文件选择对话框、文件夹扫描、播放列表持久化、元数据解析骨架。
  * 元数据解析（music-metadata-browser）在 P2 阶段接入，P0 仅返回文件名与大小。
  * 安全：
@@ -4663,9 +3782,9 @@ ipcMain.handle('music:save-playlist', tryWrap(async (_event, playlist) => {
  * P0 阶段实现：配置加密存储、收藏/缓存本地读写、API 调用骨架。
  * 实际 HTTP 请求在 P3 阶段接入，P0 仅返回空数组与默认配置。
  * 安全：
- *   - API 基址必须通过 validateAiBaseUrl 校验（与 TTS 同款 SSRF 防护）
+ *   - API 基址必须通过 validateAiBaseUrl 校验（SSRF 防护）
  *   - 电台流 URL 不在主进程校验（在渲染进程 <audio> 加载时由 Chromium 处理）
- *   - 配置加密存储：与 TTS 一致，避免明文落盘
+ *   - 配置加密存储：避免明文落盘
  * ======================================================================== */
 
 // RadioBrowser API 默认配置
@@ -4682,8 +3801,8 @@ const RADIO_DEFAULT_CONFIG = {
 // bycountryexact/China 与 bycountryexact/Hong%20Kong 端点实时拉取直接
 // Icecast/Shoutcast MP3/AAC 流地址（详见 radio:get-topstations）。
 
-// 加载 FM 配置（与 TTS 配置同级存储在 settings.aiConfig.radioConfig，加密字段无）
-// 注意：FM 配置不含密钥，但仍按 TTS 模式存入 aiConfig 命名空间，避免散落
+// 加载 FM 配置（存储在 settings.aiConfig.radioConfig，加密字段无）
+// 注意：FM 配置不含密钥，但仍按图片/视频模式存入 aiConfig 命名空间，避免散落
 ipcMain.handle('radio:load-config', tryWrap(async () => {
     const s = loadSettings();
     const cfg = (s.aiConfig && s.aiConfig.radioConfig) || {};
@@ -4692,7 +3811,7 @@ ipcMain.handle('radio:load-config', tryWrap(async () => {
     return { success: true, config: merged };
 }));
 
-// 保存 FM 配置（字段级合并，未传入字段保留原值，与 tts:save-config 同款逻辑）
+// 保存 FM 配置（字段级合并，未传入字段保留原值）
 ipcMain.handle('radio:save-config', tryWrap(async (_event, config) => {
     assertPayloadSize(config, MAX_IPC_PAYLOAD_SIZE, 'radio:save-config');
     const s = loadSettings();
@@ -4749,7 +3868,7 @@ ipcMain.handle('radio:save-config', tryWrap(async (_event, config) => {
 
 // ===== FM 电台 HTTP 工具与镜像选择（P3 阶段：真实接入 RadioBrowser API）=====
 // 以下三个 helper 仅服务 radio:get-servers / radio:get-topstations / radio:search
-// 不复用 TTS/AI 模块的 fetch 逻辑：RadioBrowser 要求带 User-Agent 头，且需要镜像回退
+// 不复用 AI 模块的 fetch 逻辑：RadioBrowser 要求带 User-Agent 头，且需要镜像回退
 
 /**
  * 发起 GET 请求并解析 JSON 响应。
@@ -5126,7 +4245,7 @@ ipcMain.handle('radio:get-stations-by-source', tryWrap(async (_event, { source, 
     const s = loadSettings();
     const cfg = Object.assign({}, RADIO_DEFAULT_CONFIG, (s.aiConfig && s.aiConfig.radioConfig) || {});
     const lim = Math.max(1, Math.min(200, Number(limit) || 100));
-    const src = String(source || 'topvote').slice(0, 32);
+    const src = encodeURIComponent(String(source || 'topvote').slice(0, 32));
 
     // 根据来源构造端点路径（路径参数 vs 查询参数）
     let pathAndQuery;
@@ -5360,17 +4479,32 @@ ipcMain.handle('logs:clear', () => {
 
 /* ==================== 应用生命周期 ==================== */
 
-app.whenReady().then(async () => {
+/* ===== 单实例锁：防止多实例并发写文件导致数据损坏 =====
+ * json-io.js 的 fileLocks 是进程内 Map，无法跨进程互斥。
+ * 多实例同时运行会导致 notes.json/settings.json 后写覆盖前写、
+ * performSync 的 isSyncing 失效，造成数据丢失或备份损坏。
+ * 第二实例启动时直接退出，并让首实例窗口前置。
+ */
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+    app.quit();
+} else {
+    app.on('second-instance', () => {
+        // 用户尝试启动第二实例：把首实例窗口前置
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.show();
+            mainWindow.focus();
+        }
+    });
+
+    app.whenReady().then(async () => {
     // 初始化日志文件（必须在 userData 目录就绪后调用）
     try { logger.initLogFile(); } catch (_) {}
 
     // 静默清理过期日志文件（7天前），异步不阻塞启动
     // 失败仅 console.error 吞掉，不影响应用启动
     try { logger.cleanOldLogs(); } catch (e) { console.error('启动清理过期日志失败:', e.message); }
-
-    // 静默清理 TTS 音频缓存（7天过期 + 100MB 上限，异步不阻塞启动）
-    // 失败仅 console.error 吞掉，不影响应用启动
-    try { cleanTtsCache(); } catch (e) { console.error('启动清理 TTS 缓存失败:', e.message); }
 
     // 一次性加载设置（含 opacity 等）
     const s = loadSettings();
@@ -5408,42 +4542,17 @@ app.whenReady().then(async () => {
         }
     });
 
-    /* ===== ttsfile 协议处理：读取 tts_cache 目录下的音频返回给渲染进程 =====
-     * URL 形如 ttsfile://tts_cache/<filename>，filename 经 encodeURIComponent 编码。
-     * 安全与 chatimg 同构：
-     *   1. 路径穿越防护：normalize 后路径必须仍在 tts_cache 目录内
-     *   2. realpath 二次校验：解析符号链接后仍必须在目录内（防 symlink 逃逸）
-     *   3. 异步 stat + 文件类型 + 大小校验（≤ 20MB，复用 MAX_IMAGE_SIZE 常量思路）
-     *   4. 异步 readFile，避免 readFileSync 阻塞主进程导致多音频加载时 UI 卡顿
-     */
-    protocol.handle('ttsfile', async (request) => {
-        try {
-            const mimeMap = {
-                '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
-                '.flac': 'audio/flac', '.aac': 'audio/aac', '.m4a': 'audio/mp4'
-            };
-            return await serveLocalFile(request.url, getTtsCacheDir(), mimeMap, {
-                maxSize: MAX_IMAGE_SIZE,
-                defaultMime: 'audio/mpeg',
-                requireRealpath: true
-            });
-        } catch (e) {
-            console.error('ttsfile 协议读取失败:', e.message);
-            return new Response('Server Error', { status: 500 });
-        }
-    });
-
     /* ===== musicfile 协议处理：读取用户挑选的本地音乐文件与专辑封面 =====
      * URL 形如：
      *   musicfile://audio/<encodeURIComponent(绝对路径)>   音频文件
      *   musicfile://cover/<encodeURIComponent(绝对路径)>    封面图片
-     * 安全要点（与 ttsfile 同构 + 路径前缀白名单）：
+     * 安全要点（路径前缀白名单）：
      *   1. host 区分类型：audio / cover，其他一律 403
      *   2. 路径解码后必须为绝对路径，且扩展名必须在白名单内
      *   3. realpath 二次校验：解析符号链接后必须仍为常规文件（不做目录约束，因用户可挑任意路径）
      *   4. 文件大小限制：音频 50MB / 封面 5MB，防止超大文件撑爆渲染进程
      *   5. 异步读取，避免阻塞主进程
-     * 注意：与 ttsfile 不同，本地音乐不在固定目录内（用户挑选），不能用 startsWith(dir) 校验，
+     * 注意：本地音乐不在固定目录内（用户挑选），不能用 startsWith(dir) 校验，
      *       改用 realpath + isFile + 扩展名白名单三重校验。
      */
     protocol.handle('musicfile', async (request) => {
@@ -5505,16 +4614,17 @@ app.whenReady().then(async () => {
     createTray();
     scheduleAutoSync();  // 启动自动同步定时器
 
-    // 应用保存的透明度
-    if (s.opacity !== undefined && mainWindow) {
-        mainWindow.setOpacity(Math.max(0.2, Math.min(1, s.opacity)));
-    }
-
     app.on('activate', () => {
         if (mainWindow) { mainWindow.show(); }
         else { createWindow(); }
     });
-});
+    }).catch(e => {
+        // 修复：原 async 回调无 .catch()，启动阶段异常成为 unhandled rejection，
+        // 应用启动失败时无任何错误提示
+        console.error('应用启动失败:', e);
+        try { if (app) app.exit(1); } catch (_) {}
+    });
+}
 
 // 退出时清理资源
 app.on('will-quit', () => {
@@ -5544,6 +4654,13 @@ let quitRetryCount = 0;
 const MAX_QUIT_RETRY = 10;
 const QUIT_RETRY_INTERVAL = 200;  // ms
 app.on('before-quit', (e) => {
+    // 退出前通知主窗口渲染进程立即强行刷盘存盘未落盘的内容
+    try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('app-saving-before-quit');
+        }
+    } catch (_) {}
+
     if (isPendingSave() && quitRetryCount < MAX_QUIT_RETRY) {
         e.preventDefault();
         quitRetryCount++;

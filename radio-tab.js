@@ -508,6 +508,8 @@
         }
         if (isPlaying) {
             audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
         } else {
             // 恢复播放：若 src 丢失则重新设置
             if (!audio.src) audio.src = currentStation.url;
@@ -706,6 +708,8 @@
         stopNetSpeedMonitor();      // 错误发生时停止速度采样
         setStatusBarPlaying(false); // 状态栏填充动画停止
         if (!isOnline()) {
+            isPlaying = false;
+            updatePlayButton();
             updateStatus('网络未连接');
             return;
         }

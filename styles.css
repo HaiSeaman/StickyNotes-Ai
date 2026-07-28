@@ -1,3 +1,6 @@
+@import "styles/variables.css";
+@import "styles/components.css";
+
 /* ==================== 设计变量 ==================== */
 :root{
     --bg-deep:#faf9f6;
@@ -157,15 +160,6 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
 .window.dark-theme .chat-regen-btn{background:rgba(58,58,60,0.7);color:var(--text-2);border-color:rgba(142,142,147,0.3)}
 
 /* ---- 翻译 / 创作页 ---- */
-.window.dark-theme .translate-panel{background:rgba(44,44,46,0.6);border-color:rgba(142,142,147,0.4)}
-.window.dark-theme .translate-upload-btn{color:var(--text-3)}
-.window.dark-theme .translate-upload-btn:hover{background:rgba(72,72,74,0.8);color:var(--text-1)}
-.window.dark-theme .translate-attach-item{background:rgba(58,58,60,0.7);border-color:rgba(142,142,147,0.3)}
-.window.dark-theme .translate-lang-select{background:rgba(58,58,60,0.7);color:var(--text-1)}
-.window.dark-theme .translate-input,.window.dark-theme .translate-output{
-    background:rgba(58,58,60,0.6);color:var(--text-1);
-}
-.window.dark-theme .translate-input::placeholder,.window.dark-theme .translate-output::placeholder{color:var(--text-3)}
 .window.dark-theme .create-section{background:transparent}
 .window.dark-theme .create-display{background:rgba(44,44,46,0.5);color:var(--text-1)}
 .window.dark-theme .create-placeholder{color:var(--text-3)}
@@ -763,7 +757,7 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
     transition:all 0.3s var(--ease);padding:0;
 }
 .create-upload-preview .upload-close:hover{background:var(--accent-rose);color:#fff}
-.create-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+.create-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap}
 /* 图片/视频模式切换按钮组 */
 .create-mode-switch{display:flex;gap:2px;margin-right:auto}
 .create-mode-btn{
@@ -1743,141 +1737,12 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
  * 布局：单栏合成区，居中限宽，提升长文本输入体验
  * V7.7 优化：头部双栏（标题+模型快选器）、音色信息卡片、深色主题适配
  * ================================================== */
-.tab-tts{padding:8px}
-.tts-wrap{
-    display:flex;height:100%;
-    /* 毛玻璃容器：与 .search-box / .ctx-menu 同款 backdrop-filter */
-    background:rgba(255,255,255,0.4);
-    backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
-    border-radius:12px;border:1px solid var(--border);
-    padding:14px;overflow:hidden;
-    /* 深色主题下使用半透明深色背景（覆盖硬编码白色） */
-}
-.window.dark-theme .tts-wrap{
-    background:rgba(44,44,46,0.5);
-}
-/* 单栏合成区：居中限宽，避免宽屏下控件过分散布 */
-.tts-section{
-    flex:1;min-width:0;display:flex;flex-direction:column;gap:11px;
-    background:var(--surface);border:1px solid var(--border);
-    border-radius:10px;padding:16px;overflow-y:auto;
-    max-width:760px;margin:0 auto;
-    scrollbar-width:thin;scrollbar-color:var(--border) transparent;
-}
-.tts-section::-webkit-scrollbar{width:6px}
-.tts-section::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
-/* 头部：左标题 + 右模型快选器（双栏布局） */
-.tts-section-header{
-    display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
-    padding-bottom:10px;border-bottom:1px solid var(--border);
-}
-.tts-header-left{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
-.tts-header-right{display:flex;align-items:center;gap:6px;flex-shrink:0}
-.tts-section-title{font-size:15px;font-weight:600;color:var(--text-1);display:flex;align-items:center;letter-spacing:0.2px}
-.tts-section-sub{font-size:11px;color:var(--text-3);line-height:1.4}
-.tts-model-label{font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:0.3px;text-transform:uppercase;white-space:nowrap}
-.tts-model-select{
-    padding:6px 10px;font-size:12px;color:var(--text-1);
-    background:var(--surface-hover);border:1px solid var(--border-strong);
-    border-radius:6px;outline:none;cursor:pointer;max-width:200px;
-    transition:border-color 0.15s,box-shadow 0.15s;
-}
-.tts-model-select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(127,179,179,0.12)}
-.tts-model-select:hover{border-color:var(--accent)}
-
-/* 文本输入域 + 字数计数器 */
-.tts-textarea-wrap{position:relative;flex:1;min-height:140px;display:flex;flex-direction:column}
-.tts-textarea{
-    flex:1;width:100%;resize:none;min-height:140px;
-    padding:12px 14px 26px;font-size:13px;line-height:1.65;
-    font-family:inherit;color:var(--text-1);
-    background:var(--surface-hover);border:1px solid var(--border);
-    border-radius:8px;outline:none;transition:border-color 0.15s,box-shadow 0.15s;
-    scrollbar-width:thin;
-}
-.tts-textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(127,179,179,0.1)}
-.tts-textarea::placeholder{color:var(--text-4)}
-.tts-textarea-counter{
-    position:absolute;bottom:7px;right:12px;font-size:10px;color:var(--text-4);
-    pointer-events:none;font-variant-numeric:tabular-nums;
-    background:rgba(255,255,255,0.6);padding:1px 6px;border-radius:4px;
-}
-.window.dark-theme .tts-textarea-counter{background:rgba(44,44,46,0.6)}
-
-/* 控件行：音色 / 格式下拉 */
-.tts-controls-row{display:flex;gap:10px}
-.tts-field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
-.tts-field-voice{flex:2}  /* 音色字段占比更大 */
-.tts-field-format{flex:1;max-width:120px}  /* 格式字段较窄 */
-.tts-field label{font-size:11px;color:var(--text-3);letter-spacing:0.3px;font-weight:500;text-transform:uppercase;display:flex;align-items:center;gap:6px}
-.tts-field-hint{font-size:10px;color:var(--text-4);font-weight:400;text-transform:none;letter-spacing:0;background:var(--surface-active);padding:1px 6px;border-radius:3px}
-.tts-field input,.tts-field select{
-    padding:8px 10px;font-size:12px;color:var(--text-1);
-    background:var(--surface-hover);border:1px solid var(--border);
-    border-radius:6px;outline:none;transition:border-color 0.15s,box-shadow 0.15s;
-    cursor:pointer;
-}
-.tts-field input{cursor:text}
-.tts-field input:focus,.tts-field select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(127,179,179,0.1)}
-.tts-field input::placeholder{color:var(--text-4)}
-.tts-instruct-field{margin-top:2px}
-
-/* 音色信息卡片：展示当前选中音色的详细描述 */
-.tts-voice-info{
-    font-size:11px;color:var(--text-2);line-height:1.5;
-    padding:7px 11px;border-radius:6px;
-    background:linear-gradient(135deg,rgba(127,179,179,0.08) 0%,rgba(107,163,201,0.05) 100%);
-    border:1px solid rgba(127,179,179,0.2);
-    display:flex;align-items:center;gap:6px;
-    transition:background 0.2s,border-color 0.2s;
-}
-.tts-voice-info::before{content:'♪';color:var(--accent);font-size:13px;flex-shrink:0}
-.tts-voice-info-default{
-    color:var(--text-3);
-    background:var(--surface-active);
-    border-color:var(--border);
-}
-.tts-voice-info-default::before{content:'♪';color:var(--text-4)}
-.window.dark-theme .tts-voice-info{
-    background:linear-gradient(135deg,rgba(10,132,255,0.08) 0%,rgba(10,132,255,0.04) 100%);
-    border-color:rgba(10,132,255,0.2);
-}
-
-/* 生成按钮 + 状态提示 */
-.tts-actions{display:flex;align-items:center;gap:10px}
-.tts-gen-btn{
-    padding:9px 18px;font-size:13px;font-weight:500;cursor:pointer;
-    background:linear-gradient(135deg,var(--accent) 0%,var(--accent-2) 100%);
-    color:#fff;border:none;border-radius:8px;
-    display:inline-flex;align-items:center;transition:background 0.15s,transform 0.1s,box-shadow 0.15s;
-    box-shadow:0 2px 8px rgba(127,179,179,0.25);
-}
-.tts-gen-btn:hover:not(:disabled){box-shadow:0 4px 12px rgba(127,179,179,0.35);transform:translateY(-1px)}
-.tts-gen-btn:active:not(:disabled){transform:scale(0.97)}
-.tts-gen-btn:disabled{opacity:0.5;cursor:not-allowed;box-shadow:none}
-.tts-status{font-size:12px;color:var(--text-3);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tts-status.error{color:var(--accent-rose)}
-.tts-status.success{color:var(--accent-emerald)}
-
-/* 音频播放器 + 下载按钮 */
-.tts-player-wrap{display:flex;align-items:center;gap:8px;padding:8px;background:var(--surface-hover);border-radius:8px;border:1px solid var(--border)}
-.tts-player-wrap audio{flex:1;min-width:0;height:32px}
-.tts-download-btn{
-    padding:6px 12px;font-size:12px;cursor:pointer;
-    background:var(--accent-emerald);color:#fff;border:none;border-radius:6px;
-    display:inline-flex;align-items:center;transition:background 0.15s;white-space:nowrap;
-}
-.tts-download-btn:hover:not(:disabled){background:#8fbf78}
-.tts-download-btn:disabled{opacity:0.5;cursor:not-allowed}
-
-/* 底部清理区 */
-.tts-footer{display:flex;justify-content:flex-end;padding-top:2px}
 
 /* ==================================================
  * 音乐页（V7.4 P1+P2 完整实现）
  * 布局：左右双栏（音乐播放器 / FM 收音机），窄屏自动堆叠
- * 主题：沿用毛玻璃 + 暗色风格，与 TTS 页保持一致
+ * 主题：沿用毛玻璃 + 暗色风格
  * ================================================== */
 .tab-music{padding:8px}
 .music-panel{
@@ -2372,21 +2237,5 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
 .fm-input.error{border-color:var(--accent-rose);}
 .fm-input.error:focus{box-shadow:0 0 0 2px rgba(224,139,139,0.25);}
 
-/* 底部工具栏：清理缓存等辅助操作 */
-.tts-footer{
-    display:flex;justify-content:flex-end;align-items:center;
-    padding-top:8px;border-top:1px solid var(--border);
-    margin-top:auto;flex-shrink:0;
-}
-/* 清理缓存按钮 */
-.tts-cleanup-btn{
-    padding:6px 12px;font-size:11px;cursor:pointer;
-    background:transparent;border:1px solid var(--border);color:var(--text-3);
-    border-radius:6px;display:inline-flex;align-items:center;justify-content:center;
-    transition:all 0.15s;
-}
-.tts-cleanup-btn:hover{background:var(--surface-hover);color:var(--accent-amber);border-color:var(--accent-amber)}
-.tts-cleanup-btn:disabled{opacity:0.5;cursor:not-allowed}
-
-/* Loading 旋转动画（TTS 合成按钮等复用） */
+/* Loading 旋转动画（按钮加载状态等复用） */
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}

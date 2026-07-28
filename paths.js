@@ -50,16 +50,9 @@ function getChatImagesDir() {
     return path.join(app.getPath('userData'), 'chat-images');
 }
 /**
- * TTS 音频缓存目录：userData/tts_cache/
- * 渲染进程通过 ttsfile:// 协议按需加载，主进程统一管控文件生命周期。
- */
-function getTtsCacheDir() {
-    return path.join(app.getPath('userData'), 'tts_cache');
-}
-/**
  * 音乐模块数据目录：userData/music/
  * 子目录：covers/（专辑封面缓存）、playlist.json（播放列表持久化）
- * 与 tts_cache 同构：主进程统一管控，渲染进程通过 musicfile:// 协议加载本地音频与封面。
+ * 主进程统一管控，渲染进程通过 musicfile:// 协议加载本地音频与封面。
  */
 function getMusicDir() {
     return path.join(app.getPath('userData'), 'music');
@@ -110,7 +103,6 @@ module.exports = {
     getCalendarPath,
     getActivityPath,
     getChatImagesDir,
-    getTtsCacheDir,
     getMusicDir,
     getMusicPlaylistPath,
     getMusicCoversDir,
