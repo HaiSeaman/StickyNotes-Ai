@@ -1,6 +1,6 @@
 /* ==================== DOM 引用 ==================== */
 // 公共工具函数从 renderer/utils.js 引入（消除与 chatTab.js 的重复定义）
-const { pad2, formatChatTime, debounce } = window.RendererUtils;
+const { pad2, formatChatTime, debounce, loadScript } = window.RendererUtils;
 const $ = (id) => document.getElementById(id);
 const noteInput = $('noteInput');
 const noteList = $('noteList');
@@ -4719,14 +4719,27 @@ tabs.forEach(tab => {
 
 
 
-/* ==================== Markdown 预览切换 ==================== */
-function renderMarkdownPreview() {
-    if (!window.marked) {
-        notePreviewWrap.textContent = 'marked.js 未加载，无法预览';
-        return;
-    }
+/* ==================== Markdown 预览切换 ====================
+ * marked 与 DOMPurify 改为懒加载：首次点击预览时才加载，加速首屏启动
+ */
+let mdLibsPromise = null;
+function ensureMarkdownLibs() {
+    if (mdLibsPromise) return mdLibsPromise;
+    mdLibsPromise = (async () => {
+        if (!window.marked) await loadScript('marked.min.js');
+        if (!window.DOMPurify) await loadScript('purify.min.js');
+    })();
+    return mdLibsPromise;
+}
+
+async function renderMarkdownPreview() {
     const md = noteInput.value || '';
     try {
+        await ensureMarkdownLibs();
+        if (!window.marked) {
+            notePreviewWrap.textContent = 'marked.js 加载失败，无法预览';
+            return;
+        }
         // marked 解析后用 DOMPurify 净化，移除 onerror/script/恶意表单等危险节点，防止 XSS
         marked.setOptions({ breaks: true, gfm: true });
         const rawHtml = marked.parse(md);

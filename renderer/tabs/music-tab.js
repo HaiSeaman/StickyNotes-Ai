@@ -124,9 +124,19 @@
             volIconBtn: document.getElementById('musicVolIconBtn'),
             volIconHigh: document.querySelector('#musicVolIconBtn .icon-vol-high'),
             volIconMute: document.querySelector('#musicVolIconBtn .icon-vol-mute'),
-            // 占位符容器（P0 的占位，P1 替换为真实 UI）
+            // 占位符容器
             placeholder: document.querySelector('#musicPlayer .music-placeholder')
         };
+
+        // 懒加载 howler.js：首次进入音乐 tab 时才加载，加速首屏启动
+        if (typeof Howl === 'undefined') {
+            try {
+                await window.RendererUtils.loadScript('howler.min.js');
+            } catch (e) {
+                console.error('[Music] howler.js 加载失败:', e);
+                reportLog('error', ['[Music] howler.js 加载失败:', e]);
+            }
+        }
 
         // 加载持久化播放列表
         try {

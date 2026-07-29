@@ -4,11 +4,22 @@ const fs = require('fs');
 const crypto = require('crypto');
 const https = require('https');
 const http = require('http');
-const AdmZip = require('adm-zip');
-const { S3Client, PutObjectCommand, HeadBucketCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
-// music-metadata-browser：解析音频 ID3/Vorbis 标签与封面图（V7.4 音乐模块）
-// parseNodeStream 接受 Node.js 可读流，避免一次性读入大文件到内存
-const { parseNodeStream } = require('music-metadata-browser');
+
+// 以下三个模块改为懒加载（用到时才 require），加速启动：
+//   - AdmZip：仅在备份打包/解压时用
+//   - @aws-sdk/client-s3：仅在 S3 同步时用
+//   - music-metadata：仅在读取音频元数据时用
+// 通过 lazyRequire 缓存首次 require 结果，避免重复加载开销
+function lazyRequire(mod) {
+    let cached = null;
+    return () => {
+        if (cached === null) cached = require(mod);
+        return cached;
+    };
+}
+const getAdmZip = lazyRequire('adm-zip');
+const getAwsS3 = lazyRequire('@aws-sdk/client-s3');
+const getMusicMetadata = lazyRequire('music-metadata');
 
 // 日志子系统（内存缓冲 + 文件轮转 + 控制台劫持 + 进程异常捕获）
 // 加载时立即劫持 console 并注册 process 异常处理，所有 console.log/warn/error 自动旁路记录
@@ -1252,6 +1263,7 @@ function buildS3Config(config) {
 
 // 统一构造 S3Client，避免 5 处 getS3Client(config) 重复
 function getS3Client(config) {
+    const { S3Client } = getAwsS3();
     return new S3Client(buildS3Config(config));
 }
 
@@ -1318,6 +1330,7 @@ async function getBackupFiles() {
  * @throws  {Error} 当 userData 下没有任何可备份的 .json 文件时抛错
  */
 async function createBackupZip() {
+    const AdmZip = getAdmZip();
     const zip = new AdmZip();
     const files = await getBackupFiles();
     if (files.length === 0) throw new Error('没有可备份的数据文件');
@@ -1410,6 +1423,7 @@ function joinWebdavPath(baseUrl, pathPrefix, fileName) {
  */
 async function uploadToS3(config, zipBuffer, fileName) {
     const s3 = getS3Client(config);
+    const { PutObjectCommand } = getAwsS3();
     const pathPrefix = normalizePathPrefix(config.path);
     const key = (pathPrefix + fileName).replace(/^\//, ''); // S3 key 不以 / 开头
 
@@ -1429,6 +1443,7 @@ async function uploadToS3(config, zipBuffer, fileName) {
  */
 async function testS3Connection(config) {
     const s3 = getS3Client(config);
+    const { HeadBucketCommand } = getAwsS3();
     await s3.send(new HeadBucketCommand({ Bucket: config.bucket }));
     return { success: true, message: '连接成功，存储桶可访问' };
 }
@@ -1439,6 +1454,7 @@ async function testS3Connection(config) {
  */
 async function listS3Backups(config) {
     const s3 = getS3Client(config);
+    const { ListObjectsV2Command } = getAwsS3();
     const pathPrefix = normalizePathPrefix(config.path);
     const prefix = pathPrefix.replace(/^\//, '');
     const command = new ListObjectsV2Command({
@@ -1472,6 +1488,7 @@ async function listS3Backups(config) {
  */
 async function deleteS3Backup(config, key) {
     const s3 = getS3Client(config);
+    const { DeleteObjectCommand } = getAwsS3();
     // 路径校验：key 必须以 pathPrefix 开头，防止误删其他路径
     const pathPrefix = normalizePathPrefix(config.path).replace(/^\//, '');
     if (pathPrefix && !key.startsWith(pathPrefix)) {
@@ -1488,6 +1505,7 @@ async function deleteS3Backup(config, key) {
  */
 async function downloadS3Backup(config, key) {
     const s3 = getS3Client(config);
+    const { GetObjectCommand } = getAwsS3();
     const pathPrefix = normalizePathPrefix(config.path).replace(/^\//, '');
     if (pathPrefix && !key.startsWith(pathPrefix)) {
         throw new Error('文件路径不在备份目录内，拒绝下载');
@@ -2054,6 +2072,7 @@ ipcMain.handle('sync:restore-backup', tryWrap(async (_event, providerKey, fileId
     const zipBuffer = await provider.downloadBackup(config, fileId);
 
     // 2. 解压到 userData（覆盖现有文件）
+    const AdmZip = getAdmZip();
     const zip = new AdmZip(zipBuffer);
     const userDataDir = app.getPath('userData');
     let restoredCount = 0;
@@ -3634,10 +3653,8 @@ ipcMain.handle('ai:generate-video', async (_event, params) => {
     }
 });
 
-/* ==================== 音乐模块 IPC Handler（V7.4 P0 骨架）====================
+/* ==================== 音乐模块 IPC Handler ====================
  * 设计：tryWrap 统一异常捕获，主进程负责文件 I/O，渲染进程零 base64 内存占用。
- * P0 阶段实现：文件选择对话框、文件夹扫描、播放列表持久化、元数据解析骨架。
- * 元数据解析（music-metadata-browser）在 P2 阶段接入，P0 仅返回文件名与大小。
  * 安全：
  *   - 文件路径必须为绝对路径，扩展名在白名单内
  *   - IPC 载荷大小校验（复用 assertPayloadSize）
@@ -3716,10 +3733,9 @@ ipcMain.handle('music:scan-folder', tryWrap(async (_event, { folderPath, recursi
     return { success: true, files, truncated: files.length >= MAX_FILES };
 }));
 
-// 读取音频文件元数据（P1+P2 实现：接入 music-metadata-browser 解析 ID3/Vorbis 标签与封面）
+// 读取音频文件元数据：接入 music-metadata 解析 ID3/Vorbis 标签与封面
 // 解析失败时降级返回文件名作为标题，保证可用性
 // 封面图保存到 userData/music/covers/{sha256}.{ext}，避免重复存储
-// crypto 已在文件顶部 require；parseNodeStream 在顶部 require 区块统一引入
 
 // MIME 类型映射（用于 music-metadata 的 mimeType 提示）
 const MUSIC_MIME_MAP = {
@@ -3752,7 +3768,8 @@ ipcMain.handle('music:read-metadata', tryWrap(async (_event, { filePath }) => {
         // 高水位标记设为 1MB，平衡读取效率与内存占用
         rs.highWaterMark = 1024 * 1024;
         try {
-            const metadata = await parseNodeStream(rs, { mimeType });
+            const { parseStream } = getMusicMetadata();
+            const metadata = await parseStream(rs, mimeType);
             if (metadata.common) {
                 title = metadata.common.title || title;
                 artist = (metadata.common.artist && String(metadata.common.artist)) || '';
@@ -3825,10 +3842,8 @@ ipcMain.handle('music:save-playlist', tryWrap(async (_event, playlist) => {
     return { success: true };
 }));
 
-/* ==================== FM 收音机模块 IPC Handler（V7.4 P0 骨架）====================
+/* ==================== FM 收音机模块 IPC Handler ====================
  * 设计：主进程负责 RadioBrowser API 调用（含 SSRF 校验 + 超时），渲染进程零跨域。
- * P0 阶段实现：配置加密存储、收藏/缓存本地读写、API 调用骨架。
- * 实际 HTTP 请求在 P3 阶段接入，P0 仅返回空数组与默认配置。
  * 安全：
  *   - API 基址必须通过 validateAiBaseUrl 校验（SSRF 防护）
  *   - 电台流 URL 不在主进程校验（在渲染进程 <audio> 加载时由 Chromium 处理）

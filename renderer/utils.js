@@ -71,5 +71,29 @@
             .replace(/"/g, '&quot;');
     }
 
-    window.RendererUtils = { pad2, formatChatTime, debounce, escapeHtml };
+    /**
+     * 动态加载脚本（懒加载）：首次用到时才插入 <script> 标签，加速首屏启动
+     * 同一 src 只加载一次，重复调用返回缓存的 Promise
+     * @param {string} src - 脚本路径（相对路径，如 'howler.min.js'）
+     * @returns {Promise<void>} 加载完成后 resolve，失败 reject
+     */
+    const scriptCache = new Map();
+    function loadScript(src) {
+        if (scriptCache.has(src)) return scriptCache.get(src);
+        const promise = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = src;
+            s.defer = true;
+            s.onload = () => resolve();
+            s.onerror = () => {
+                scriptCache.delete(src);
+                reject(new Error('脚本加载失败: ' + src));
+            };
+            document.head.appendChild(s);
+        });
+        scriptCache.set(src, promise);
+        return promise;
+    }
+
+    window.RendererUtils = { pad2, formatChatTime, debounce, escapeHtml, loadScript };
 })();

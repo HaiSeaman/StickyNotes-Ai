@@ -1,6 +1,6 @@
 # AI-StickyNotes 便签
 
-> 一款基于 Electron 的毛玻璃风格桌面便签应用，集成了 AI 对话、AI 创作、TTS 语音工坊、音乐播放器、FM 网络电台、日历、闹钟等模块，定位为「个人知识工作台」。
+> 一款基于 Electron 的毛玻璃风格桌面便签应用，集成了 AI 对话、AI 创作、音乐播放器、FM 网络电台、日历、闹钟等模块，定位为「个人知识工作台」。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Electron](https://img.shields.io/badge/Electron-42.5.1-47848F.svg?logo=electron&logoColor=white)](https://www.electronjs.org/)
@@ -27,14 +27,14 @@
 
 ## 项目简介
 
-AI-StickyNotes 是一个功能丰富的 Windows 桌面便签应用，远超传统便签工具的范畴。它将便签、待办、日历、闹钟等基础效率工具与 AI 对话、AI 创作（文生图/图生图/文生视频/图生视频）、TTS 语音合成、AI 翻译、本地音乐播放器、FM 网络电台等高级能力深度融合到一个毛玻璃风格（Glassmorphism）的统一界面中。
+AI-StickyNotes 是一个功能丰富的 Windows 桌面便签应用，远超传统便签工具的范畴。它将便签、待办、日历、闹钟等基础效率工具与 AI 对话、AI 创作（文生图/图生图/文生视频/图生视频）、本地音乐播放器、FM 网络电台等高级能力深度融合到一个毛玻璃风格（Glassmorphism）的统一界面中。
 
 应用采用 Electron 主进程 + 渲染进程 + 预加载脚本的三层架构，所有涉网与涉密操作集中在主进程管控，渲染进程在 `contextIsolation` + `sandbox` 隔离模式下运行，结合 safeStorage 凭据加密、SSRF 防护、CSP 内容安全策略、PIN 软件锁等多层安全机制，确保用户数据与 API 凭据的安全。
 
 ### 核心亮点
 
-- **8 大功能 tab 一体化**：便签、闹钟、日历、聊天、创作、语音、音乐、翻译
-- **AI 能力全覆盖**：流式多轮对话、文生图/图生图、文生视频/图生视频、TTS 语音合成、AI 翻译（含 OCR）
+- **6 大功能 tab 一体化**：便签、闹钟、日历、聊天、创作、音乐
+- **AI 能力全覆盖**：流式多轮对话、文生图/图生图、文生视频/图生视频
 - **多媒体娱乐**：howler.js 内核的本地音乐播放器 + RadioBrowser API 的 FM 网络电台
 - **企业级安全**：safeStorage 凭据加密、双层 SSRF 防护、CSP 策略、PIN 软件锁（scrypt + safeStorage 二次加密）、路径遍历防护、防 Zip Slip、防计时攻击
 - **数据可靠性**：JSON 原子写入、便签历史版本快照、S3/WebDAV 双后端同步备份
@@ -59,8 +59,6 @@ AI-StickyNotes 是一个功能丰富的 Windows 桌面便签应用，远超传�
 |------|---------|
 | **AI 对话** | OpenAI 兼容协议、流式 SSE 输出、思考模式（Qwen3/DeepSeek-R1）、多模态（图片输入）、会话归档、导出 Markdown |
 | **AI 创作** | 文生图/图生图（OpenAI DALL-E + 阿里云百炼 qwen-image）、文生视频/图生视频（百炼 wan2.7）、多尺寸/多比例 |
-| **TTS 语音** | CosyVoice + Qwen-Audio 双系列 4 模型、情感指令（Director Mode）、MP3/WAV/OGG 输出、音色持久化 |
-| **AI 翻译** | 文本翻译 + 图片 OCR 翻译、8 种目标语言 |
 
 ### 多媒体娱乐
 
@@ -88,7 +86,7 @@ AI-StickyNotes 是一个功能丰富的 Windows 桌面便签应用，远超传�
 | **前端** | 原生 JavaScript、HTML5、CSS3（CSS 变量 + Flex/Grid） |
 | **音频** | howler.js 2.2.4（音乐播放）、原生 HTML5 Audio（FM 流媒体） |
 | **Markdown** | marked 12.0.2（渲染）、DOMPurify 3.2.0（XSS 净化） |
-| **音乐元数据** | music-metadata-browser 2.5.11（ID3/Vorbis 标签解析） |
+| **音乐元数据** | music-metadata 7.14.0（ID3/Vorbis 标签解析） |
 | **云存储** | @aws-sdk/client-s3 3.1088.0（S3 兼容同步） |
 | **压缩** | adm-zip 0.6.0（备份打包/解压） |
 | **打包工具** | @electron/packager 20.0.3 |
@@ -105,9 +103,9 @@ AI-StickyNotes 是一个功能丰富的 Windows 桌面便签应用，远超传�
 │                     主进程 (main.js)                         │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
 │  │  IPC 处理器  │  │  协议注册    │  │  窗口/托盘管理       │ │
-│  │  (~101 个)  │  │  (chatimg/  │  │  (主窗口 + popout   │ │
-│  │             │  │   ttsfile/  │  │   小窗口)           │ │
-│  │             │  │   musicfile)│  │                     │ │
+│  │  (~95 个)   │  │  (chatimg/  │  │  (主窗口 + popout   │ │
+│  │             │  │   musicfile)│  │   小窗口)           │ │
+│  │             │  │             │  │                     │ │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  安全层：safeStorage 加密 / SSRF 校验 / PIN 锁 /       │  │
@@ -123,7 +121,7 @@ AI-StickyNotes 是一个功能丰富的 Windows 桌面便签应用，远超传�
 ┌─────────────────────────┴───────────────────────────────────┐
 │                   渲染进程 (renderer.js)                     │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────┐ │
-│  │ 便签/待办 │ │ 闹钟/日历 │ │ 聊天/创作 │ │ 音乐/FM/翻译   │ │
+│  │ 便签/待办 │ │ 闹钟/日历 │ │ 聊天/创作 │ │ 音乐/FM        │ │
 │  └──────────┘ └──────────┘ └──────────┘ └────────────────┘ │
 │  独立模块：calendar.js / music-tab.js / radio-tab.js        │
 └─────────────────────────────────────────────────────────────┘
@@ -134,8 +132,8 @@ AI-StickyNotes 是一个功能丰富的 Windows 桌面便签应用，远超传�
 | 文件 | 职责 |
 |------|------|
 | `main.js` | 主进程入口，IPC 处理器、协议注册、窗口管理、安全策略 |
-| `renderer.js` | 渲染进程主逻辑（便签、闹钟、聊天、创作、翻译等） |
-| `index.html` | 主窗口 UI 结构（8 个 tab + 模态框） |
+| `renderer.js` | 渲染进程主逻辑（便签、闹钟、聊天、创作等） |
+| `index.html` | 主窗口 UI 结构（6 个 tab + 模态框） |
 | `preload.js` | 主窗口预加载，暴露 `window.api` |
 | `popout-preload.js` | 独立小窗口预加载，最小化暴露 `window.popout`（仅 8 个方法） |
 | `paths.js` | 数据文件路径集中管理 |
@@ -150,7 +148,7 @@ AI-StickyNotes 是一个功能丰富的 Windows 桌面便签应用，远超传�
 
 ### IPC 通信设计
 
-主进程注册了约 **101 个 IPC 处理器**，按功能模块分组：
+主进程注册了约 **95 个 IPC 处理器**，按功能模块分组：
 
 - 便签 CRUD 与归档（`notes:*`）
 - 聊天与归档（`chat:*`）
@@ -161,8 +159,6 @@ AI-StickyNotes 是一个功能丰富的 Windows 桌面便签应用，远超传�
 - 软件锁（`lock:*`）
 - AI 配置与聊天（`ai:save-config` / `ai:load-config` / `ai:chat` / `ai:generate`）
 - AI 图片/视频生成（`ai:generate-image` / `ai:generate-video`）
-- AI 翻译（`ai:translate`）
-- TTS 语音（`tts:*`）
 - 音乐播放器（`music:*`）
 - FM 收音机（`radio:*`）
 - 便签历史快照（`note-history:*`）
@@ -264,22 +260,7 @@ npx electron .
 - 上传参考图（图生图 / 图生视频）
 - 复制生成结果
 
-### 6. 语音（TTS）
-
-- 模型快选器：4 种模型一键切换
-  - `qwen-audio-3.0-tts-plus`（旗舰）
-  - `qwen-audio-3.0-tts-flash`（实时）
-  - `cosyvoice-v1`（标准）
-  - `cosyvoice-v1-instruct`（情感控制）
-- 预设音色选择（按模型分组）
-- 输出格式：MP3 / WAV / OGG
-- 情感指令（Director Mode）：仅 CosyVoice-Instruct 支持
-- 音色信息卡片
-- 播放器 + 下载按钮
-- 音频缓存管理（7 天过期 + 100MB 上限）
-- 单次合成文本上限 1000 字符
-
-### 7. 音乐（Music）
+### 6. 音乐（Music）
 
 **左侧 - 本地音乐播放器**：
 
@@ -303,15 +284,6 @@ npx electron .
 - 收藏夹管理
 - 搜索（200ms 防抖）
 - 电台配置加密存储
-
-### 8. 翻译（Translate）
-
-- 原文/译文双面板布局
-- 文本翻译
-- 图片 OCR 翻译：支持粘贴（Ctrl+V）/ 上传按钮 / 拖拽三种上传方式
-- 8 种目标语言：中文、英文、日文、法文、德文、葡萄牙文、阿拉伯文、西班牙文
-- 一键翻译 + 复制译文
-- 翻译图片自动清理（成功或失败均清理）
 
 ---
 
@@ -364,32 +336,9 @@ npx electron .
 - 流式下载到磁盘：避免大视频 OOM
 - 配置三级 fallback：视频专用 → 图片共用百炼 → 聊天通用
 
-### TTS 语音合成
-
-基于阿里云百炼 `SpeechSynthesizer` 端点，支持 **2 大系列 4 种模型**：
-
-| 模型 | 默认音色 | 适用场景 |
-|------|---------|---------|
-| `qwen-audio-3.0-tts-plus` | `longanlingxin`（旗舰音色） | 高品质合成 |
-| `qwen-audio-3.0-tts-flash` | `longanhuan_v3.6`（精品中文） | 实时合成 |
-| `cosyvoice-v1` | `longxiaochun` | 标准合成 |
-| `cosyvoice-v1-instruct` | `longxiaochun` | 情感控制（Director Mode） |
-
-- 输出格式：MP3 / WAV / OGG
-- 采样率：默认 22050
-- 音色与模型严格匹配（避免 411 Engine error）
-- 音频通过 `ttsfile://` 协议加载（非 base64，非 file://）
-- 音色持久化（防抖保存 + 启动恢复）
-
-### AI 翻译
-
-- 文本翻译 + 图片 OCR 翻译
-- 8 种目标语言
-- 翻译图片自动清理
-
 ### 保存路径统一管理
 
-图片、视频、TTS 三种 AI 生成内容**共用同一保存路径**（`imageSavePath`），用户在设置中修改图片保存路径后，三个模块的保存路径自动同步更新。
+图片、视频两种 AI 生成内容**共用同一保存路径**（`imageSavePath`），用户在设置中修改图片保存路径后，两个模块的保存路径自动同步更新。
 
 ---
 
@@ -408,7 +357,7 @@ npx electron .
 
 加密的凭据包括：
 
-- AI API Key（聊天 / 图片 / 视频 / TTS 四套独立 Key）
+- AI API Key（聊天 / 图片 / 视频三套独立 Key）
 - S3 `accessKey` / `secretKey`
 - WebDAV `pass`
 - PIN 哈希 + salt（二次 safeStorage 加密）
@@ -421,7 +370,7 @@ npx electron .
 |------|------|------|
 | `isSafeExternalUrl()` | 仅 `https:` | 严格版，用于百炼返回的图片 URL 下载校验 |
 | `isSafePublicStreamUrl()` | 允许 `http:` | 宽松版，用于网络电台流（Icecast/Shoutcast 多为 HTTP） |
-| `validateAiBaseUrl()` | `http:` / `https:` | 用于所有 AI/TTS/sync baseUrl 校验入口 |
+| `validateAiBaseUrl()` | `http:` / `https:` | 用于所有 AI/sync baseUrl 校验入口 |
 
 统一拒绝：环回地址、链路本地（含云元数据 169.254.169.254）、私网段（10.x / 172.16-31.x / 192.168.x）、IPv6 私网（fc/fd）。
 
@@ -431,11 +380,11 @@ npx electron .
 
 ```
 default-src 'self';
-connect-src 'self' https: ttsfile:;
+connect-src 'self' https:;
 style-src 'self' 'unsafe-inline';
 script-src 'self';
 img-src 'self' data: chatimg: musicfile: https:;
-media-src 'self' data: ttsfile: musicfile: https: http:;
+media-src 'self' data: musicfile: https: http:;
 object-src 'none';
 base-uri 'self';
 form-action 'self';
@@ -445,7 +394,7 @@ frame-ancestors 'none';
 - `script-src 'self'`：仅允许本地脚本，杜绝内联脚本注入
 - `object-src 'none'`：禁止 Flash/Java 等插件
 - `frame-ancestors 'none'`：禁止被嵌入 iframe（防点击劫持）
-- 自定义协议：`chatimg:` / `ttsfile:` / `musicfile:` 用于本地资源加载
+- 自定义协议：`chatimg:` / `musicfile:` 用于本地资源加载
 
 ### PIN 软件锁
 
@@ -468,7 +417,7 @@ frame-ancestors 'none';
 - `requireRealpath` 选项：`fs.realpath` 二次校验符号链接，防 symlink 逃逸
 - 文件大小校验：超过 `maxSize` 返回 413
 
-应用到 `chatimg://` / `ttsfile://` / `musicfile://` 三个自定义协议。
+应用到 `chatimg://` / `musicfile://` 两个自定义协议。
 
 ### 防 Zip Slip 攻击
 
@@ -484,7 +433,6 @@ frame-ancestors 'none';
 - 聊天图片：20MB（base64 膨胀 1.4 倍校验）
 - 剪贴板文本：1MB
 - 音乐音频：50MB / 封面 5MB
-- TTS 单次文本：1000 字符
 - 日志上报：单条 8192 字符 / 500 条上限
 - 备份 ZIP：200MB
 
@@ -534,7 +482,6 @@ frame-ancestors 'none';
 | `calendar.json` | 日历↔闹钟映射 |
 | `activity.json` | 活跃度数据（热力图） |
 | `chat-images/` | 聊天图片本地存储 |
-| `tts_cache/` | TTS 音频缓存（7 天 / 100MB） |
 | `music/` | 音乐数据根目录 |
 | `music/playlist.json` | 播放列表持久化 |
 | `music/covers/` | 专辑封面缓存（SHA-256 命名） |
@@ -620,7 +567,7 @@ npm run pack
 | `dompurify` | HTML 净化（XSS 防护） |
 | `howler` | 音乐播放器内核 |
 | `marked` | Markdown 渲染 |
-| `music-metadata-browser` | 音频元数据解析 |
+| `music-metadata` | 音频元数据解析 |
 
 ---
 
@@ -643,9 +590,6 @@ AI-StickyNotes/
 ├── shared-utils.js          # 渲染层共享工具函数
 ├── overlay-logger.js        # 子窗口日志批量上报
 ├── styles.css               # 全局样式（亮色/暗色主题）
-├── howler.min.js            # howler.js 音频库（本地）
-├── marked.min.js            # marked Markdown 渲染库（本地）
-├── purify.min.js            # DOMPurify HTML 净化库（本地）
 ├── package.json             # 项目配置与依赖
 ├── 启动.bat                  # 启动脚本（自动检测 + 独立进程启动）
 ├── 启动_debug.bat            # 调试启动脚本（启用 DevTools）
@@ -715,7 +659,7 @@ Copyright (c) 2026 SeamanHAI
 - [howler.js](https://howlerjs.com/) - 现代 Web 音频库
 - [marked](https://marked.js.org/) - Markdown 解析器
 - [DOMPurify](https://github.com/cure53/DOMPurify) - XSS 净化器
-- [music-metadata-browser](https://github.com/Borewit/music-metadata-browser) - 音频元数据解析
+- [music-metadata](https://github.com/Borewit/music-metadata) - 音频元数据解析
 - [RadioBrowser](https://api.radio-browser.info/) - 免费社区 FM 电台数据库
-- [阿里云百炼](https://dashscope.aliyuncs.com/) - AI 图片/视频/TTS 服务
+- [阿里云百炼](https://dashscope.aliyuncs.com/) - AI 图片/视频服务
 - [AWS SDK for JavaScript v3](https://github.com/aws/aws-sdk-js-v3) - S3 兼容存储 SDK

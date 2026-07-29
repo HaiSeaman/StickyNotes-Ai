@@ -9,12 +9,21 @@ test('genId 返回数值类型', () => {
     assert.ok(Number.isFinite(id), '应当是有限数');
 });
 
-test('genId 连续调用大概率生成不同值', () => {
-    // genId = Date.now()*1000 + random(0..999)，同步循环内 Date.now 相同，
-    // 碰撞概率存在但极低。测试 100 次至少 95 个不同（容忍极小碰撞）。
+test('genId 不同时间调用生成不同值', async () => {
+    // genId = Date.now()*1000 + random(0..999)
+    // 同一毫秒内有 1000 种可能值，同步循环 100 次碰撞率高（生日悖论）
+    // 改为不同毫秒调用，验证时间维度上的唯一性
+    const id1 = genId();
+    await new Promise(r => setTimeout(r, 2));
+    const id2 = genId();
+    assert.notEqual(id1, id2, '不同时间调用应生成不同值');
+});
+
+test('genId 同毫秒内多次调用至少有一个不同值', () => {
+    // 同毫秒内 random 部分 0-999，100 次调用至少应有 2 个不同（极低概率全相同）
     const ids = new Set();
     for (let i = 0; i < 100; i++) ids.add(genId());
-    assert.ok(ids.size >= 95, '100 次调用至少 95 个不同，实际 ' + ids.size);
+    assert.ok(ids.size >= 2, '同毫秒 100 次调用至少 2 个不同，实际 ' + ids.size);
 });
 
 /* ==================== previewText ==================== */
