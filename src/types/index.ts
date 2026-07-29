@@ -1,6 +1,2 @@
-export interface Note {
-  id: string;
-  content: string;
-  createdAt: number;
-  updatedAt: number;
-}
+export * from './entities.js';
+export * from './ipc.js';
