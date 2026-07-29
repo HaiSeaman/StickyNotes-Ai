@@ -1390,30 +1390,33 @@ popoutNoteBtn.addEventListener('click', async (e) => {
 });
 
 // 小窗口内容更新 → 同步回主窗口的 textarea 和 note 对象
-window.api.onPopoutNoteUpdate((data) => {
-    if (!data || !data.noteId) return;
-    const note = getCurrentNote();
-    if (note && String(note.id) === String(data.noteId)) {
-        if (data.content !== undefined && data.content !== noteInput.value) {
-            noteInput.value = data.content;
-            note.content = data.content;
-            note.updatedAt = now();
-            contentDirty = true;
-            // 标记来自小窗口的更新，handleContentInput 不再回推，避免 IPC 回环
-            suppressPushToPopout = true;
-            handleContentInput();
-            suppressPushToPopout = false;
+if (window.api && typeof window.api.onPopoutNoteUpdate === 'function') {
+    window.api.onPopoutNoteUpdate((data) => {
+        if (!data || !data.noteId) return;
+        const note = getCurrentNote();
+        if (note && String(note.id) === String(data.noteId)) {
+            if (data.content !== undefined && data.content !== noteInput.value) {
+                noteInput.value = data.content;
+                note.content = data.content;
+                note.updatedAt = now();
+                contentDirty = true;
+                suppressPushToPopout = true;
+                handleContentInput();
+                suppressPushToPopout = false;
+            }
         }
-    }
-});
+    });
+}
 
 // 小窗口关闭 → 清理标记
-window.api.onPopoutNoteClose((data) => {
-    if (!data || !data.noteId) return;
-    if (poppedOutNoteId === String(data.noteId)) {
-        poppedOutNoteId = null;
-    }
-});
+if (window.api && typeof window.api.onPopoutNoteClose === 'function') {
+    window.api.onPopoutNoteClose((data) => {
+        if (!data || !data.noteId) return;
+        if (poppedOutNoteId === String(data.noteId)) {
+            poppedOutNoteId = null;
+        }
+    });
+}
 
 /* ==================== 扯出待办小纸条（待办事项独立置顶小窗口） ====================
  * 点击"扯出待办"按钮 → 主进程打开待办小窗口
@@ -1442,23 +1445,27 @@ if (popoutTodoBtn) {
 }
 
 // 待办小窗口更新 → 同步回主窗口全局 todos 并触发重渲染 + 保存
-window.api.onPopoutTodoUpdate((data) => {
-    if (!data) return;
-    if (Array.isArray(data.todos)) {
-        todos = data.todos;
-        renderTodoList();
-        if (typeof pushTodosToPopoutIfOpen === 'function') pushTodosToPopoutIfOpen();
-        saveTodosToDisk();
-    }
-});
+if (window.api && typeof window.api.onPopoutTodoUpdate === 'function') {
+    window.api.onPopoutTodoUpdate((data) => {
+        if (!data) return;
+        if (Array.isArray(data.todos)) {
+            todos = data.todos;
+            renderTodoList();
+            if (typeof pushTodosToPopoutIfOpen === 'function') pushTodosToPopoutIfOpen();
+            saveTodosToDisk();
+        }
+    });
+}
 
 // 待办小窗口关闭 → 清理标记
-window.api.onPopoutTodoClose((data) => {
-    if (!data) return;
-    if (poppedOutTodoNoteId === 'global-todos') {
-        poppedOutTodoNoteId = null;
-    }
-});
+if (window.api && typeof window.api.onPopoutTodoClose === 'function') {
+    window.api.onPopoutTodoClose((data) => {
+        if (!data) return;
+        if (poppedOutTodoNoteId === 'global-todos') {
+            poppedOutTodoNoteId = null;
+        }
+    });
+}
 
 // 主窗口改了待办 → 实时推送给待办小窗口（如果已扯出）
 function pushTodosToPopoutIfOpen() {
@@ -3711,9 +3718,11 @@ autoSyncToggle.addEventListener('change', saveSyncConfig);
 autoSyncInterval.addEventListener('change', saveSyncConfig);
 
 // 接收自动同步结果
-window.api.onAutoSyncResult((data) => {
-    setSyncStatus(data.message, data.success ? 'success' : 'error');
-});
+if (window.api && typeof window.api.onAutoSyncResult === 'function') {
+    window.api.onAutoSyncResult((data) => {
+        setSyncStatus(data.message, data.success ? 'success' : 'error');
+    });
+}
 
 /* ==================== 恢复备份功能 ==================== */
 // 当前备份列表对应的 provider（'s3' 或 'webdav'），供删除/恢复回调引用
@@ -4406,9 +4415,11 @@ chatTrashClearBtn.addEventListener('click', async (e) => {
 });
 
 // 接收恢复完成通知（主进程通过 webContents.send 推送）
-window.api.onRestoreDone((data) => {
-    setSyncStatus('已还原 ' + (data.restoredFiles || 0) + ' 个数据文件', 'success');
-});
+if (window.api && typeof window.api.onRestoreDone === 'function') {
+    window.api.onRestoreDone((data) => {
+        setSyncStatus('已还原 ' + (data.restoredFiles || 0) + ' 个数据文件', 'success');
+    });
+}
 
 /* ==================== 窗口缩放（右下角手柄） ==================== */
 if (resizeHandle) {
@@ -5137,17 +5148,15 @@ function toggleAlarm(id) {
 }
 
 function renderAlarmList() {
-    // 过滤掉带有 date 属性的日历闹钟，闹钟列表仅显示常规/日常闹钟，避免一年下来列表被铺满
-    const regularAlarms = alarms.filter(a => !a.date);
-    alarmCount.textContent = regularAlarms.length;
-    if (regularAlarms.length === 0) {
-        alarmList.innerHTML = '<div style="text-align:center;color:var(--text-4);padding:20px;font-size:12px">暂无日常闹钟，请在上方设置</div>';
+    alarmCount.textContent = alarms.length;
+    if (alarms.length === 0) {
+        alarmList.innerHTML = '<div style="text-align:center;color:var(--text-4);padding:20px;font-size:12px">暂无闹钟，请在上方设置</div>';
         return;
     }
     // 按时间排序
-    regularAlarms.sort((a, b) => (a.h * 3600 + a.m * 60 + a.s) - (b.h * 3600 + b.m * 60 + b.s));
+    alarms.sort((a, b) => (a.h * 3600 + a.m * 60 + a.s) - (b.h * 3600 + b.m * 60 + b.s));
     const frag = document.createDocumentFragment();
-    regularAlarms.forEach(a => {
+    alarms.forEach(a => {
         const isRinging = a.enabled && a.triggered;
         const div = document.createElement('div');
         div.className = 'alarm-list-item' + (isRinging ? ' ringing' : '');
@@ -5203,30 +5212,12 @@ alarmList.addEventListener('click', (e) => {
 
 alarmAddBtn.addEventListener('click', addAlarm);
 
-let stoppedAlarmKeysSet = new Set();
-
 alarmStopBtn.addEventListener('click', () => {
     stopAlarmSound();
     timerDisplay.classList.remove('ringing');
     timerStartBtn.textContent = '▶ 开始';
-    
-    // 收集所有当前处于 triggered 状态的闹钟 key，防止下一秒在补发窗口内再次误触发响铃
-    const d = new Date();
-    const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    let dateAlarms = [];
-    if (window.CalendarModule && typeof window.CalendarModule.getDateAlarms === 'function') {
-        try { dateAlarms = window.CalendarModule.getDateAlarms(); } catch (e) {}
-    }
-    const allAlarms = [...alarms, ...dateAlarms];
-    allAlarms.forEach(a => {
-        if (a.triggered) {
-            const key = `${dateStr}-${a.h}-${a.m}-${a.s || 0}-${a.label || ''}`;
-            stoppedAlarmKeysSet.add(key);
-            a.triggered = false;
-            a.lastTriggerKey = key;
-        }
-    });
-
+    // 重置所有已触发的闹钟状态（保留 lastTriggerKey 防止同秒重复响）
+    alarms.forEach(a => { a.triggered = false; });
     saveAlarms();
     renderAlarmList();
     alarmStopBtn.disabled = true;
@@ -5260,7 +5251,6 @@ function checkAlarms() {
     // 跨天重置：日期变化时清除所有 triggered 标志，让闹钟能在新一天重新响铃
     // 保留 lastTriggerKey（含日期）防止当天重复触发
     if (lastCheckDate && lastCheckDate !== dateStr) {
-        stoppedAlarmKeysSet.clear();
         let changed = false;
         alarms.forEach(a => {
             if (a.triggered) { a.triggered = false; changed = true; }
@@ -5271,22 +5261,15 @@ function checkAlarms() {
     // 用 lastTriggerKey 记录每个闹钟最近一次触发的时间戳（到秒），避免同秒重复触发，也支持跨天再次响铃
     let anyRinging = false;
     let windowHidden = document.hidden;
-    
-    // 合并全局普通闹钟与日历专属闹钟进行统一倒计时检测
-    let dateAlarms = [];
-    if (window.CalendarModule && typeof window.CalendarModule.getDateAlarms === 'function') {
-        try { dateAlarms = window.CalendarModule.getDateAlarms(); } catch (e) {}
-    }
-    const allAlarms = [...alarms, ...dateAlarms];
-
-    allAlarms.forEach(a => {
+    alarms.forEach(a => {
         if (!a.enabled) return;
         // 日历闹钟：带 date 字段的仅在指定日期触发；普通闹钟：每天到点即触发
         if (a.date && a.date !== dateStr) return;
-        const key = `${dateStr}-${a.h}-${a.m}-${a.s || 0}-${a.label || ''}`;
-        if (a.lastTriggerKey === key || stoppedAlarmKeysSet.has(key)) return; // 今天已触发或已被用户手动点击停止，跳过
+        const key = `${dateStr}-${a.h}-${a.m}-${a.s}`;
+        if (a.lastTriggerKey === key) return; // 今天已触发过，跳过
         const alarmSec = a.h * 3600 + a.m * 60 + (a.s || 0);
         // 触发条件：当前时间到达闹钟时间，且在补触发窗口内
+        // （原实现要求精确到秒匹配，窗口最小化/休眠时定时器被节流会直接错过整秒导致永不响铃）
         if (nowSec >= alarmSec && (nowSec - alarmSec) <= ALARM_FIRE_WINDOW_SEC) {
             a.triggered = true;
             a.lastTriggerKey = key;
@@ -5295,16 +5278,14 @@ function checkAlarms() {
     });
     if (anyRinging) {
         // 找到正在响铃的闹钟，使用它的铃声
-        const ringingAlarm = allAlarms.find(a => a.enabled && a.triggered);
+        const ringingAlarm = alarms.find(a => a.enabled && a.triggered);
         startAlarmSound(ringingAlarm ? ringingAlarm.sound : 'default');
         saveAlarms();
         renderAlarmList();
-        if (alarmStopBtn) alarmStopBtn.disabled = false;
+        alarmStopBtn.disabled = false;
         try {
             const label = ringingAlarm && ringingAlarm.label ? ringingAlarm.label : '';
-            if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification('日历闹钟提醒', { body: `${pad2(h)}:${pad2(m)}${label ? ' · ' + label : ''}`, silent: true });
-            }
+            new Notification('闹钟响铃', { body: `${pad2(h)}:${pad2(m)}:${pad2(s)}${label ? ' · ' + label : ''}`, silent: true });
         } catch (e) { console.warn('发送闹钟通知失败:', e.message); }
         // 窗口处于隐藏/最小化（托盘）时，响铃同时把主窗口唤起，确保用户能听到并看到
         if (windowHidden && window.api && typeof window.api.showWindowForAlarm === 'function') {
@@ -5401,14 +5382,18 @@ async function initWindowProps() {
         fixedBtn.classList.toggle('active', f);
         fixedBtn.title = f ? '已固定（点击解除）' : '固定窗口位置';
     } catch (e) { console.warn('读取固定状态失败:', e.message); }
-    window.api.onFixedChanged(f => {
-        fixedBtn.classList.toggle('active', f);
-        fixedBtn.title = f ? '已固定（点击解除）' : '固定窗口位置';
-    });
-    window.api.onPinChanged(pinned => {
-        pinBtn.classList.toggle('active', pinned);
-        pinBtn.title = pinned ? '取消置顶' : '窗口置顶';
-    });
+    if (window.api && typeof window.api.onFixedChanged === 'function') {
+        window.api.onFixedChanged(f => {
+            fixedBtn.classList.toggle('active', f);
+            fixedBtn.title = f ? '已固定（点击解除）' : '固定窗口位置';
+        });
+    }
+    if (window.api && typeof window.api.onPinChanged === 'function') {
+        window.api.onPinChanged(pinned => {
+            pinBtn.classList.toggle('active', pinned);
+            pinBtn.title = pinned ? '取消置顶' : '窗口置顶';
+        });
+    }
 }
 
 function initNoteUI() {
