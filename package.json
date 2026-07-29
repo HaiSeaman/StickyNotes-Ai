@@ -5,6 +5,10 @@
   "description": "Windows 桌面便签 - Electron 毛玻璃风格",
   "main": "main.js",
   "scripts": {
+    "build:main": "tsup",
+    "build:renderer": "vite build",
+    "build:ts": "npm run build:main && npm run build:renderer",
+    "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
     "start": "electron .",
     "test": "node --test",
     "pack": "npx @electron/packager . --platform=win32 --arch=x64 --out=dist --overwrite --icon=build/icon.ico --asar --prune --ignore=\"^dist(/|$)\" --ignore=node_modules/.cache --ignore=\\.reasonrix --ignore=electron_err.log --ignore=electron_out.log --ignore=startup-err.log --ignore=startup.log --ignore=_fix_line.js --ignore=_fix_m1.js --ignore=test_load.js --ignore=_check_asar.js --ignore=gen_icon.js --ignore=\"[vV][0-9].*_.*\\.md\" --ignore=CODE_WIKI.md --ignore=代码审计报告.md --ignore=.git --ignore=.gitignore --ignore=\"(^|/)test(/|$)\" --ignore=\"(^|/)docs(/|$)\""
