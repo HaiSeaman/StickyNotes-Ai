@@ -291,9 +291,10 @@
                 </div>
                 <div class="todo-list" id="todoList"></div>
                 <div class="todo-bottom-bar">
-                    <!-- 左下角工具栏：归档文件夹 + 垃圾桶，与右侧待办输入框上下对齐 -->
+                    <!-- 左下角工具栏：待办归档文件夹 + 便签归档文件夹 + 垃圾桶 -->
                     <div class="note-toolbar">
-                        <button class="note-tool-btn" id="archiveFolderBtn" title="查看归档文件夹" aria-label="查看归档文件夹"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+                        <button class="note-tool-btn todo-archive-folder-btn" id="todoArchiveFolderBtn" title="查看待办归档文件夹" aria-label="查看待办归档文件夹"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>
+                        <button class="note-tool-btn note-archive-folder-btn" id="archiveFolderBtn" title="查看便签归档文件夹" aria-label="查看便签归档文件夹"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none" aria-hidden="true"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
                         <button class="note-tool-btn" id="trashFolderBtn" title="查看垃圾桶" aria-label="查看垃圾桶"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
                     </div>
                     <!-- 右侧待办输入框 -->
@@ -818,11 +819,28 @@
     </div>
 </div>
 
+<!-- 待办事项归档文件夹模态框 -->
+<div class="folder-modal" id="todoArchiveModal" role="dialog" aria-modal="true" aria-labelledby="todoArchiveModalTitle">
+    <div class="folder-card">
+        <div class="folder-header">
+            <div class="folder-title" id="todoArchiveModalTitle"><span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span>待办事项归档</span><span class="folder-count" id="todoArchiveCount">0</span></div>
+            <button class="folder-close" id="todoArchiveCloseBtn" aria-label="关闭">&times;</button>
+        </div>
+        <div class="folder-search-bar">
+            <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="todoArchiveSearchInput" class="search-input" placeholder="搜索归档待办..." aria-label="搜索归档待办">
+        </div>
+        <div class="folder-list" id="todoArchiveList">
+            <div class="folder-empty">暂无归档待办事项</div>
+        </div>
+    </div>
+</div>
+
 <!-- 归档文件夹模态框 -->
 <div class="folder-modal" id="archiveModal" role="dialog" aria-modal="true" aria-labelledby="archiveModalTitle">
     <div class="folder-card">
         <div class="folder-header">
-            <div class="folder-title" id="archiveModalTitle"><span>🗄️</span><span>归档文件夹</span><span class="folder-count" id="archiveCount">0</span></div>
+            <div class="folder-title" id="archiveModalTitle"><span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></span><span>便签归档文件夹</span><span class="folder-count" id="archiveCount">0</span></div>
             <button class="folder-close" id="archiveCloseBtn" aria-label="关闭">&times;</button>
         </div>
         <div class="folder-search-bar">
@@ -957,9 +975,6 @@
     </div>
 </div>
 
-<script src="marked.min.js" defer></script>
-<script src="purify.min.js" defer></script>
-<script src="howler.min.js" defer></script>
 <script src="shared-utils.js" defer></script>
 <script src="constants/appConstants.js" defer></script>
 <script src="renderer/utils.js" defer></script>
@@ -968,9 +983,8 @@
 <script src="renderer/tabs/radio-tab.js" defer></script>
 <script src="renderer/tabs/chatTab.js" defer></script>
 <script src="renderer/tabs/createTab.js" defer></script>
-<script src="renderer/soundEffects.js" defer></script>
 <script src="renderer/securityPin.js" defer></script>
 <script src="renderer/themePalette.js" defer></script>
-<script src="renderer.js" defer></script>
+<script type="module" src="/src/renderer/main.ts"></script>
 </body>
 </html>

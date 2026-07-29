@@ -142,6 +142,7 @@ export interface RadioStation {
 
 export interface RadioConfig {
   favorites: RadioStation[];
+  customStations?: RadioStation[];
   lastStationId?: string;
   volume?: number;
 }
