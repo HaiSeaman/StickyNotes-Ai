@@ -81,6 +81,10 @@ export interface UserSettings {
  */
 export interface SyncConfig {
   provider: 'webdav' | 'github' | 'gitee' | 'onedrive' | 'custom';
+  url?: string;
+  user?: string;
+  pass?: string;
+  allowSelfSigned?: boolean;
   serverUrl?: string;
   username?: string;
   password?: string;
