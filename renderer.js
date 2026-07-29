@@ -5137,15 +5137,17 @@ function toggleAlarm(id) {
 }
 
 function renderAlarmList() {
-    alarmCount.textContent = alarms.length;
-    if (alarms.length === 0) {
-        alarmList.innerHTML = '<div style="text-align:center;color:var(--text-4);padding:20px;font-size:12px">暂无闹钟，请在上方设置</div>';
+    // 过滤掉带有 date 属性的日历闹钟，闹钟列表仅显示常规/日常闹钟，避免一年下来列表被铺满
+    const regularAlarms = alarms.filter(a => !a.date);
+    alarmCount.textContent = regularAlarms.length;
+    if (regularAlarms.length === 0) {
+        alarmList.innerHTML = '<div style="text-align:center;color:var(--text-4);padding:20px;font-size:12px">暂无日常闹钟，请在上方设置</div>';
         return;
     }
     // 按时间排序
-    alarms.sort((a, b) => (a.h * 3600 + a.m * 60 + a.s) - (b.h * 3600 + b.m * 60 + b.s));
+    regularAlarms.sort((a, b) => (a.h * 3600 + a.m * 60 + a.s) - (b.h * 3600 + b.m * 60 + b.s));
     const frag = document.createDocumentFragment();
-    alarms.forEach(a => {
+    regularAlarms.forEach(a => {
         const isRinging = a.enabled && a.triggered;
         const div = document.createElement('div');
         div.className = 'alarm-list-item' + (isRinging ? ' ringing' : '');
@@ -5201,12 +5203,30 @@ alarmList.addEventListener('click', (e) => {
 
 alarmAddBtn.addEventListener('click', addAlarm);
 
+let stoppedAlarmKeysSet = new Set();
+
 alarmStopBtn.addEventListener('click', () => {
     stopAlarmSound();
     timerDisplay.classList.remove('ringing');
     timerStartBtn.textContent = '▶ 开始';
-    // 重置所有已触发的闹钟状态（保留 lastTriggerKey 防止同秒重复响）
-    alarms.forEach(a => { a.triggered = false; });
+    
+    // 收集所有当前处于 triggered 状态的闹钟 key，防止下一秒在补发窗口内再次误触发响铃
+    const d = new Date();
+    const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    let dateAlarms = [];
+    if (window.CalendarModule && typeof window.CalendarModule.getDateAlarms === 'function') {
+        try { dateAlarms = window.CalendarModule.getDateAlarms(); } catch (e) {}
+    }
+    const allAlarms = [...alarms, ...dateAlarms];
+    allAlarms.forEach(a => {
+        if (a.triggered) {
+            const key = `${dateStr}-${a.h}-${a.m}-${a.s || 0}-${a.label || ''}`;
+            stoppedAlarmKeysSet.add(key);
+            a.triggered = false;
+            a.lastTriggerKey = key;
+        }
+    });
+
     saveAlarms();
     renderAlarmList();
     alarmStopBtn.disabled = true;
@@ -5240,6 +5260,7 @@ function checkAlarms() {
     // 跨天重置：日期变化时清除所有 triggered 标志，让闹钟能在新一天重新响铃
     // 保留 lastTriggerKey（含日期）防止当天重复触发
     if (lastCheckDate && lastCheckDate !== dateStr) {
+        stoppedAlarmKeysSet.clear();
         let changed = false;
         alarms.forEach(a => {
             if (a.triggered) { a.triggered = false; changed = true; }
@@ -5262,8 +5283,8 @@ function checkAlarms() {
         if (!a.enabled) return;
         // 日历闹钟：带 date 字段的仅在指定日期触发；普通闹钟：每天到点即触发
         if (a.date && a.date !== dateStr) return;
-        const key = `${dateStr}-${a.h}-${a.m}-${a.s}-${a.label || ''}`;
-        if (a.lastTriggerKey === key) return; // 今天已触发过，跳过
+        const key = `${dateStr}-${a.h}-${a.m}-${a.s || 0}-${a.label || ''}`;
+        if (a.lastTriggerKey === key || stoppedAlarmKeysSet.has(key)) return; // 今天已触发或已被用户手动点击停止，跳过
         const alarmSec = a.h * 3600 + a.m * 60 + (a.s || 0);
         // 触发条件：当前时间到达闹钟时间，且在补触发窗口内
         if (nowSec >= alarmSec && (nowSec - alarmSec) <= ALARM_FIRE_WINDOW_SEC) {

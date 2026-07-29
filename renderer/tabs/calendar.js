@@ -465,20 +465,6 @@
         const alarm = { h: h, m: m, s: 0, label: label || '', sound: 'default', enabled: true };
         entry.alarms.push(alarm);
 
-        // 同步加入 renderer.js 的全局闹钟队列（带 date 字段，checkAlarms 会识别）
-        if (typeof alarms !== 'undefined' && typeof saveAlarms === 'function') {
-            // id 加随机偏移避免同毫秒添加两个闹钟时 id 冲突
-            alarms.push({
-                id: genId(),
-                h: h, m: m, s: 0,
-                enabled: true, triggered: false,
-                label: label || '',
-                sound: 'default',
-                date: iso
-            });
-            saveAlarms();
-        }
-
         // await saveData 确保数据落盘后再返回，调用方可感知失败
         try {
             await saveData();
@@ -486,13 +472,6 @@
             // 回滚内存中的添加，保持 UI 与磁盘一致
             const idx = entry.alarms.indexOf(alarm);
             if (idx >= 0) entry.alarms.splice(idx, 1);
-            if (typeof alarms !== 'undefined' && typeof saveAlarms === 'function') {
-                const globalIdx = alarms.findIndex(a =>
-                    a.date === iso && a.h === h && a.m === m && a.label === (label || '')
-                );
-                if (globalIdx >= 0) alarms.splice(globalIdx, 1);
-                saveAlarms();
-            }
             throw e;
         }
     }
@@ -502,30 +481,12 @@
         const entry = calData[iso];
         if (!entry || !entry.alarms) return;
         const removed = entry.alarms.splice(idx, 1)[0];
-        let globalIdx = -1;
-        if (removed && typeof alarms !== 'undefined' && typeof saveAlarms === 'function') {
-            globalIdx = alarms.findIndex(a =>
-                a.date === iso && a.h === removed.h && a.m === removed.m && a.label === removed.label
-            );
-            if (globalIdx >= 0) alarms.splice(globalIdx, 1);
-            saveAlarms();
-        }
 
         try {
             await saveData();
         } catch (e) {
             // 回滚：把刚删的闹钟放回原位
             entry.alarms.splice(idx, 0, removed);
-            if (globalIdx >= 0 && removed) {
-                alarms.splice(globalIdx, 0, {
-                    id: genId(),
-                    h: removed.h, m: removed.m, s: removed.s || 0,
-                    enabled: removed.enabled !== false, triggered: false,
-                    label: removed.label || '', sound: removed.sound || 'default',
-                    date: iso
-                });
-                saveAlarms();
-            }
             throw e;
         }
         renderMonthView();
