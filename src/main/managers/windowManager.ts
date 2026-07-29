@@ -36,7 +36,7 @@ export class WindowManager {
     if (isDev && process.env.VITE_DEV_SERVER_URL) {
       this.mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     } else {
-      this.mainWindow.loadFile(path.join(app.getAppPath(), 'dist-renderer', 'index.html'));
+      this.mainWindow.loadFile(path.join(app.getAppPath(), 'index.html'));
     }
 
     this.mainWindow.on('closed', () => {
@@ -79,7 +79,7 @@ export class WindowManager {
     if (isDev && process.env.VITE_DEV_SERVER_URL) {
       popwin.loadURL(`${process.env.VITE_DEV_SERVER_URL}#popout?id=${noteId}`);
     } else {
-      popwin.loadFile(path.join(app.getAppPath(), 'dist-renderer', 'index.html'), {
+      popwin.loadFile(path.join(app.getAppPath(), 'index.html'), {
         hash: `popout?id=${noteId}`
       });
     }

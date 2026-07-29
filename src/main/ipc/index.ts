@@ -5,6 +5,26 @@ import { securityManager } from '../managers/securityManager.js';
 import { Note, TodoItem, TodoGroup, UserSettings, ActivityData } from '../../types/index.js';
 
 export function registerIpcHandlers(): void {
+  // Window controls
+  ipcMain.handle('window:minimize', () => {
+    const win = windowManager.getMainWindow();
+    if (win) win.minimize();
+  });
+
+  ipcMain.handle('window:close', () => {
+    const win = windowManager.getMainWindow();
+    if (win) win.close();
+  });
+
+  ipcMain.handle('window:show', () => {
+    const win = windowManager.getMainWindow();
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+  });
+
   // Notes
   ipcMain.handle('notes:get', () => {
     return storageManager.getNotes();
