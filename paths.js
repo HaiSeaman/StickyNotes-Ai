@@ -10,6 +10,14 @@ const { app } = require('electron');
 function getNotesPath() {
     return path.join(app.getPath('userData'), 'notes.json');
 }
+// 待办事项主数据
+function getTodosPath() {
+    return path.join(app.getPath('userData'), 'todos.json');
+}
+// 待办事项归档数据
+function getArchivedTodosPath() {
+    return path.join(app.getPath('userData'), 'todos_archived.json');
+}
 // 便签归档数据
 function getArchivedNotesPath() {
     return path.join(app.getPath('userData'), 'notes_archived.json');
@@ -95,6 +103,8 @@ function getRadioFavoritesPath() {
 
 module.exports = {
     getNotesPath,
+    getTodosPath,
+    getArchivedTodosPath,
     getArchivedNotesPath,
     getTrashedNotesPath,
     getArchivedChatsPath,

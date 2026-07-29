@@ -60,6 +60,8 @@ const { registerSystemIpc } = require('./main/ipc/systemIpc');
  * ================================================== */
 const {
     getNotesPath,
+    getTodosPath,
+    getArchivedTodosPath,
     getArchivedNotesPath,
     getTrashedNotesPath,
     getArchivedChatsPath,
@@ -545,7 +547,8 @@ function openPopoutWindowCommon(opts) {
         minWidth,
         minHeight,
         frame: false,
-        alwaysOnTop: true,             // 默认死死钉在最上层
+        alwaysOnTop: true,             // 默认置顶
+        alwaysOnTopLevel: 'screen-saver',
         skipTaskbar: false,            // 任务栏可见（方便用户切换）
         resizable: true,
         maximizable: false,
@@ -598,7 +601,7 @@ function togglePopoutPin(noteId, type) {
     if (!win || win.isDestroyed()) return { success: false, pinned: false };
     const cur = win.isAlwaysOnTop();
     const next = !cur;
-    win.setAlwaysOnTop(next);
+    win.setAlwaysOnTop(next, next ? 'screen-saver' : 'normal');
     // 通知小窗口自身更新按钮 UI
     try {
         win.webContents.send('popout-pin-changed', { pinned: next });
@@ -683,16 +686,7 @@ body{
 }
 .todo-item:hover .todo-del{opacity:1}
 .todo-del:hover{background:rgba(224,139,139,0.2);color:#E08B8B}
-.todo-defer{
-    width:20px;height:20px;border:none;background:transparent;
-    color:#AAA;cursor:pointer;border-radius:4px;
-    display:flex;align-items:center;justify-content:center;padding:0;
-    opacity:0;transition:all 0.18s;
-}
-.todo-item:hover .todo-defer{opacity:1}
-.todo-defer:hover{background:rgba(255,159,10,0.18);color:#FF9F0A}
-.todo-item.deferred{opacity:0.7;border-left:2px solid #FF9F0A;padding-left:8px;background:rgba(255,159,10,0.04)}
-.todo-defer-badge{display:inline-block;background:rgba(255,159,10,0.22);color:#FF9F0A;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-right:6px;letter-spacing:0.3px}
+
 .todo-empty{padding:20px;text-align:center;color:#999;font-size:12px}
 .todo-input-bar{
     flex-shrink:0;display:flex;gap:6px;padding:8px 10px;
@@ -771,32 +765,26 @@ function render(){
     if (!todos || todos.length === 0){
         listWrap.innerHTML = '<div class="todo-empty">暂无待办事项</div>';
     } else {
-        // 排序：未延期未完成在前，已完成次之，已延期到底部
+        // 排序：未完成在前，已完成在后
         const sorted = todos.slice().sort((a, b) => {
-            const aD = !!a.deferred, bD = !!b.deferred;
-            if (aD !== bD) return aD ? 1 : -1;
             const aDone = !!a.done, bDone = !!b.done;
             if (aDone !== bDone) return aDone ? 1 : -1;
             return 0;
         });
         let html = '';
         sorted.forEach(t => {
-            const deferred = !!t.deferred;
-            html += '<div class="todo-item'+(deferred?' deferred':'')+'" data-id="'+t.id+'">'
+            html += '<div class="todo-item" data-id="'+t.id+'">'
                 + '<div class="todo-check'+(t.done?' checked':'')+'" data-act="toggle">'+(t.done?'✓':'')+'</div>'
                 + '<span class="todo-text'+(t.done?' done':'')+'">'
-                    + (deferred ? '<span class="todo-defer-badge">⏰ 延期</span>' : '')
                     + escapeHtml(t.text)
                 + '</span>'
-                + (t.done || deferred ? '' : '<button class="todo-defer" data-act="defer" title="延期到明天"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></button>')
                 + '<button class="todo-del" data-act="del" title="删除">✕</button>'
                 + '</div>';
         });
         listWrap.innerHTML = html;
     }
     const doneCount = todos.filter(t => t.done).length;
-    const deferredCount = todos.filter(t => t.deferred).length;
-    countText.textContent = '共 ' + todos.length + ' 项 · 已完成 ' + doneCount + (deferredCount ? ' · 延期 ' + deferredCount : '');
+    countText.textContent = '共 ' + todos.length + ' 项 · 已完成 ' + doneCount;
 }
 
 function showSaved(){
@@ -821,23 +809,11 @@ listWrap.addEventListener('click', (e) => {
         const t = todos.find(x => String(x.id) === String(id));
         if (t){
             t.done = !t.done;
-            if (t.done && t.deferred) t.deferred = false;
             render(); syncToMain();
         }
     } else if (e.target.dataset.act === 'del'){
         todos = todos.filter(x => String(x.id) !== String(id));
         render(); syncToMain();
-    } else if (e.target.dataset.act === 'defer'){
-        const t = todos.find(x => String(x.id) === String(id));
-        if (t){
-            t.deferred = true;
-            t.deferredAt = Date.now();
-            t.done = false;
-            // 移到末尾
-            todos = todos.filter(x => String(x.id) !== String(id));
-            todos.push(t);
-            render(); syncToMain();
-        }
     }
 });
 
@@ -845,7 +821,7 @@ listWrap.addEventListener('click', (e) => {
 function addTodo(){
     const text = inputEl.value.trim();
     if (!text) return;
-    todos.push({ id: genId(), text, done: false });
+    todos.push({ id: genId(), text, done: false, createdAt: Date.now(), updatedAt: Date.now() });
     inputEl.value = '';
     render(); syncToMain();
 }
@@ -968,7 +944,16 @@ ipcMain.on('popout-todo:push-from-main', (_event, data) => {
     } catch (e) { console.warn('推送待办更新失败:', e.message); }
 });
 
-/* ==================== 小窗口置顶切换 IPC ==================== */
+/* ==================== 小窗口置顶切换与关闭 IPC ==================== */
+ipcMain.on('popout:close-current', (event) => {
+    try {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        if (win && !win.isDestroyed()) {
+            win.close();
+        }
+    } catch (e) { console.warn('关闭当前小窗口失败:', e.message); }
+});
+
 ipcMain.handle('popout:toggle-pin', (_event, { noteId, type }) => {
     try {
         return togglePopoutPin(noteId, type);
@@ -1028,6 +1013,13 @@ function createTray() {
 
 // 便签数据
 ipcMain.handle('notes:load', () => loadJSONAsync(getNotesPath(), []));
+ipcMain.handle('notes:save', wrapSaveHandler(getNotesPath, '便签数据'));
+
+// 独立待办事项数据
+ipcMain.handle('todos:load', () => loadJSONAsync(getTodosPath(), []));
+ipcMain.handle('todos:save', wrapSaveHandler(getTodosPath, '待办事项数据'));
+ipcMain.handle('todos:load-archived', () => loadJSONAsync(getArchivedTodosPath(), []));
+ipcMain.handle('todos:save-archived', wrapSaveHandler(getArchivedTodosPath, '归档待办事项数据'));
 // 标记写盘是否进行中：退出时若仍在写，延迟退出以免数据丢失
 // 使用计数器而非布尔值，支持多个 IPC 通道并发保存（如 notes:save 与 calendar:save 交错）
 let pendingSaveCount = 0;
@@ -1063,8 +1055,6 @@ function tryWrap(fn) {
         }
     };
 }
-
-ipcMain.handle('notes:save', wrapSaveHandler(getNotesPath, '便签数据'));
 
 // 归档便签数据（独立的 notes_archived.json，结构与 notes.json 相同）
 ipcMain.handle('notes:load-archived', () => loadJSONAsync(getArchivedNotesPath(), []));

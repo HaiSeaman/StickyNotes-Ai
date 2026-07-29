@@ -150,8 +150,11 @@ const ICONS = {
 let notes = [];
 let archivedNotes = [];   // 归档便签
 let trashedNotes = [];    // 垃圾桶便签
+let todos = [];           // 独立待办事项主数据
+let archivedTodos = [];   // 归档待办事项
 let currentNoteId = null;
 let saveTimer = null;
+let todoSaveTimer = null;
 let pushTimer = null;          // pushNoteToPopout 的独立防抖计时器（200ms），与 saveTimer 解耦
 let contentDirty = false;
 let selectedColor = null;
@@ -159,6 +162,7 @@ const SAVE_DELAY = 500;
 let noteSearchKeyword = '';        // 便签列表搜索关键字
 let archiveSearchKeyword = '';     // 归档搜索关键字
 let trashSearchKeyword = '';       // 垃圾桶搜索关键字
+let todoArchiveSearchKeyword = ''; // 待办归档搜索关键字
 
 /* ==================== 工具函数 ==================== */
 const now = () => Date.now();
@@ -375,12 +379,12 @@ window.addEventListener('beforeunload', () => {
         saveTimer = null;
         try { window.api.saveNotes(notes); } catch (e) { console.error('退出时保存便签失败:', e.message); }
     }
-    // 待办小窗口独立计时器也需在退出时 flush，防 todo 数据丢失
+    // 3. 待办事项刷盘（清空防抖定时器并直接同步 flush 避免退出丢数据）
     if (todoSaveTimer) {
         clearTimeout(todoSaveTimer);
         todoSaveTimer = null;
-        try { window.api.saveTodos(todos); } catch (e) { console.error('退出时保存待办失败:', e.message); }
     }
+    try { window.api.saveTodos(todos); } catch (e) { console.error('退出时保存待办失败:', e.message); }
     // 4. 清理全局定时器，避免窗口关闭后仍触发回调报错
     if (clockTimerId) { clearInterval(clockTimerId); clockTimerId = null; }
     if (alarmTimerId) { clearInterval(alarmTimerId); alarmTimerId = null; }
@@ -397,8 +401,8 @@ if (window.api && window.api.onAppSavingBeforeQuit) {
         if (todoSaveTimer) {
             clearTimeout(todoSaveTimer);
             todoSaveTimer = null;
-            try { window.api.saveTodos(todos); } catch (e) { console.error('退出前保存待办失败:', e.message); }
         }
+        try { window.api.saveTodos(todos); } catch (e) { console.error('退出前保存待办失败:', e.message); }
     });
 }
 
@@ -420,11 +424,46 @@ const saveNotesToDisk = async () => {
         }
     })();
     await saveInFlight;
-    // 保存期间又有新数据写入，递归再保存一次
     if (savePending) {
         savePending = false;
         return saveNotesToDisk();
     }
+};
+// 串行化保存独立待办数据
+let saveTodosInFlight = null;
+let saveTodosPending = false;
+
+const saveTodosToDisk = async () => {
+    if (!window.api || !window.api.saveTodos) return;
+    if (saveTodosInFlight) {
+        saveTodosPending = true;
+        return saveTodosInFlight;
+    }
+    saveTodosInFlight = (async () => {
+        try {
+            await window.api.saveTodos(todos);
+        } finally {
+            saveTodosInFlight = null;
+        }
+    })();
+    await saveTodosInFlight;
+    if (saveTodosPending) {
+        saveTodosPending = false;
+        return saveTodosToDisk();
+    }
+};
+
+const saveTodosToDiskDebounced = () => {
+    if (todoSaveTimer) clearTimeout(todoSaveTimer);
+    todoSaveTimer = setTimeout(() => {
+        saveTodosToDisk();
+        todoSaveTimer = null;
+    }, 400);
+};
+
+const saveArchivedTodosToDisk = async () => {
+    if (!window.api || !window.api.saveArchivedTodos) return;
+    await window.api.saveArchivedTodos(archivedTodos);
 };
 
 async function loadNotesFromDisk() {
@@ -436,6 +475,16 @@ async function loadNotesFromDisk() {
     if (!Array.isArray(archivedNotes)) archivedNotes = [];
     trashedNotes = await window.api.loadTrashedNotes();
     if (!Array.isArray(trashedNotes)) trashedNotes = [];
+
+    // 加载独立待办事项及归档待办数据
+    if (window.api.loadTodos) {
+        todos = await window.api.loadTodos();
+        if (!Array.isArray(todos)) todos = [];
+    }
+    if (window.api.loadArchivedTodos) {
+        archivedTodos = await window.api.loadArchivedTodos();
+        if (!Array.isArray(archivedTodos)) archivedTodos = [];
+    }
 }
 
 let detailFontSize = 14;  // 详情页正文字体大小（px），通过 CSS 变量 --detail-font-size 应用
@@ -518,10 +567,7 @@ function renderNoteList() {
             if (timeStr) {
                 html += `<div class="note-created-time">${escapeHtml(timeStr)}</div>`;
             }
-            if (n.todos && n.todos.length > 0) {
-                const done = n.todos.filter(t => t.done).length;
-                html += `<div class="note-preview">✓ ${done}/${n.todos.length} 待办</div>`;
-            }
+
             // 悬停时显示的快捷归档按钮（删除按钮左边）和删除按钮
             html += `<button class="note-archive" data-action="archive-note" title="归档此便签">📦</button>`;
             html += `<button class="note-del" data-action="delete-note" title="删除此便签">✕</button>`;
@@ -632,7 +678,6 @@ async function archiveNote(id) {
     await saveNotesToDisk();
     renderNoteList();
     renderEditor();
-    renderTodoList();
 }
 
 let switchNoteToken = 0;  // 自增 token，防止快速连续切便签时旧回调覆盖新状态导致 UI 闪烁
@@ -653,7 +698,6 @@ async function switchNote(id) {
     if (myToken !== switchNoteToken) return;
     renderNoteList();
     renderEditor();
-    renderTodoList();
 }
 
 async function createNote() {
@@ -665,7 +709,7 @@ async function createNote() {
         const cur = getCurrentNote();
         if (cur) { cur.content = noteInput.value; cur.updatedAt = now(); contentDirty = false; }
     }
-    const newNote = { id: genId(), content: '', todos: [], createdAt: now(), updatedAt: now() };
+    const newNote = { id: genId(), content: '', createdAt: now(), updatedAt: now() };
     notes.push(newNote);
     currentNoteId = newNote.id;
     await saveNotesToDisk();
@@ -701,70 +745,81 @@ function renderEditor() {
     }
 }
 
-// 事件委托：待办列表
+// 格式化待办显示时间 (月-日 时:分)
+function formatTodoTime(timestamp) {
+    if (!timestamp) return '';
+    const d = new Date(timestamp);
+    if (isNaN(d.getTime())) return '';
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${month}-${day} ${hours}:${minutes}`;
+}
+
+// 事件委托：待办列表（含归档操作按钮与完成/删除）
 todoList.addEventListener('click', (e) => {
     const item = e.target.closest('.todo-item');
     if (!item || !item.dataset.id) return;
     const todoId = Number(item.dataset.id);
     if (e.target.classList.contains('todo-check')) {
         toggleTodo(todoId);
+    } else if (e.target.closest('.todo-archive-btn')) {
+        e.stopPropagation();
+        archiveTodo(todoId);
     } else if (e.target.classList.contains('todo-del')) {
         e.stopPropagation();
         deleteTodo(todoId);
-    } else if (e.target.classList.contains('todo-defer')) {
-        e.stopPropagation();
-        deferTodo(todoId);
     }
 });
 
 function renderTodoList() {
-    const note = getCurrentNote();
     todoList.innerHTML = '';
-    if (!note || !note.todos) { todoCount.textContent = '0'; return; }
-    // 排序：未延期且未完成在前，已完成次之，已延期到底部
-    const sorted = note.todos.slice().sort((a, b) => {
-        const aDeferred = !!a.deferred;
-        const bDeferred = !!b.deferred;
-        if (aDeferred !== bDeferred) return aDeferred ? 1 : -1;
+    // 排序：未完成在前，已完成在后；同等状态按创建时间倒序
+    const sorted = todos.slice().sort((a, b) => {
         const aDone = !!a.done;
         const bDone = !!b.done;
         if (aDone !== bDone) return aDone ? 1 : -1;
-        return 0;
+        return (b.createdAt || 0) - (a.createdAt || 0);
     });
-    todoCount.textContent = note.todos.length;
+    todoCount.textContent = todos.length;
     const frag = document.createDocumentFragment();
     sorted.forEach(t => {
         const item = document.createElement('div');
-        item.className = 'todo-item' + (t.deferred ? ' deferred' : '');
+        item.className = 'todo-item';
         item.dataset.id = t.id;
+
         const chk = document.createElement('div');
         chk.className = 'todo-check' + (t.done ? ' checked' : '');
         chk.textContent = t.done ? '\u2713' : '';
+
+        const contentWrap = document.createElement('div');
+        contentWrap.className = 'todo-content-wrap';
+
         const txt = document.createElement('span');
         txt.className = 'todo-text' + (t.done ? ' done' : '');
-        // 已延期的待办前面加一个"⏰延期"小徽章
-        if (t.deferred) {
-            const badge = document.createElement('span');
-            badge.className = 'todo-defer-badge';
-            badge.textContent = '⏰ 延期';
-            txt.appendChild(badge);
-            const textNode = document.createTextNode(t.text);
-            txt.appendChild(textNode);
+        txt.textContent = t.text;
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'todo-time';
+        if (t.done && t.completedAt) {
+            timeSpan.textContent = `完成于 ${formatTodoTime(t.completedAt)}`;
         } else {
-            txt.textContent = t.text;
+            timeSpan.textContent = formatTodoTime(t.createdAt || t.id);
         }
-        // 延期按钮（仅对未完成且未延期的待办显示）
-        const deferBtn = document.createElement('button');
-        deferBtn.className = 'todo-defer';
-        deferBtn.title = '延期到明天 / 移到列表末尾';
-        deferBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>';
-        if (t.done || t.deferred) {
-            deferBtn.style.display = 'none';
-        }
+        contentWrap.append(txt, timeSpan);
+
+        // 归档按钮（复用小图标样式）
+        const archiveBtn = document.createElement('button');
+        archiveBtn.className = 'todo-archive-btn';
+        archiveBtn.title = '归档此待办';
+        archiveBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+
         const del = document.createElement('button');
         del.className = 'todo-del';
         del.textContent = '\u2715';
-        item.append(chk, txt, deferBtn, del);
+
+        item.append(chk, contentWrap, archiveBtn, del);
         frag.appendChild(item);
     });
     todoList.appendChild(frag);
@@ -773,75 +828,56 @@ function renderTodoList() {
 async function addTodo() {
     const text = todoInput.value.trim();
     if (!text) return;
-    const note = getCurrentNote();
-    if (!note) return;
-    if (!note.todos) note.todos = [];
-    note.todos.push({ id: genId(), text, done: false });
-    note.updatedAt = now();
+    const currentTime = now();
+    todos.push({
+        id: genId(),
+        text,
+        done: false,
+        createdAt: currentTime,
+        updatedAt: currentTime
+    });
     todoInput.value = '';
-    contentDirty = true;
-    await saveContentAndFlush();
+    saveTodosToDiskDebounced();
     renderTodoList();
-    renderNoteList();
     pushTodosToPopoutIfOpen();
     todoInput.focus();
 }
 
 async function toggleTodo(id) {
-    const note = getCurrentNote();
-    if (!note) return;
-    const t = note.todos.find(x => x.id === id);
+    const t = todos.find(x => x.id === id);
     if (!t) return;
     t.done = !t.done;
-    // 如果勾选完成，自动取消延期标记（已完成不需要延期）
-    if (t.done && t.deferred) t.deferred = false;
-    note.updatedAt = now();
-    contentDirty = true;
-    await saveContentAndFlush();
+    t.updatedAt = now();
+    if (t.done) {
+        t.completedAt = now();
+    } else {
+        delete t.completedAt;
+    }
+    saveTodosToDiskDebounced();
     renderTodoList();
-    renderNoteList();
     pushTodosToPopoutIfOpen();
-    // 埋点：勾选完成（非取消）时给今日待办计数 +1
     if (t.done && window.api && window.api.incrementActivity) {
         try { window.api.incrementActivity('todo'); } catch (e) { console.warn('待办埋点上报失败:', e.message); }
     }
 }
 
 async function deleteTodo(id) {
-    const note = getCurrentNote();
-    if (!note) return;
-    note.todos = note.todos.filter(x => x.id !== id);
-    note.updatedAt = now();
-    contentDirty = true;
-    await saveContentAndFlush();
+    todos = todos.filter(x => x.id !== id);
+    saveTodosToDiskDebounced();
     renderTodoList();
-    renderNoteList();
     pushTodosToPopoutIfOpen();
 }
 
-/**
- * 延期一条待办到明天 / 移到列表末尾
- * 实现策略：标记 deferred=true + deferredAt 时间戳，并把这条 todo 移到 note.todos 数组末尾
- * 延期后：自动取消"已完成"状态（延期意味着还没做完），列表中沉到底部，带"⏰ 延期"徽章
- * 第二天打开软件时，用户可以再点击"延期徽章"或勾选框恢复
- */
-async function deferTodo(id) {
-    const note = getCurrentNote();
-    if (!note) return;
-    const t = note.todos.find(x => x.id === id);
+async function archiveTodo(id) {
+    const t = todos.find(x => x.id === id);
     if (!t) return;
-    // 标记为延期
-    t.deferred = true;
-    t.deferredAt = Date.now();
-    t.done = false;  // 延期视为未完成
-    // 把它移到数组末尾（这样渲染时自然在底部，且数据顺序也对）
-    note.todos = note.todos.filter(x => x.id !== id);
-    note.todos.push(t);
-    note.updatedAt = now();
-    contentDirty = true;
-    await saveContentAndFlush();
+    todos = todos.filter(x => x.id !== id);
+    t.archivedAt = now();
+    archivedTodos.unshift(t);
+    await saveTodosToDisk();
+    await saveArchivedTodosToDisk();
     renderTodoList();
-    renderNoteList();
+    if (typeof renderTodoArchiveList === 'function') renderTodoArchiveList();
     pushTodosToPopoutIfOpen();
 }
 
@@ -1333,7 +1369,6 @@ let poppedOutNoteId = null;
 // 标记来自小窗口的内容更新，handleContentInput 时跳过回推，避免 IPC 回环
 let suppressPushToPopout = false;
 // 待办小窗口更新用独立计时器，避免与 handleContentInput 的 saveTimer 交叉覆盖
-let todoSaveTimer = null;
 
 popoutNoteBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -1388,63 +1423,48 @@ window.api.onPopoutNoteClose((data) => {
 const popoutTodoBtn = $('popoutTodoBtn');
 let poppedOutTodoNoteId = null;
 
-popoutTodoBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const note = getCurrentNote();
-    if (!note || !note.id) return;
-    try {
-        const title = (note.title && note.title.trim()) ? note.title.trim() : '待办事项';
-        const todos = (note.todos || []).slice();
-        const result = await window.api.popOutTodo(note.id, title, todos);
-        if (result && result.success) {
-            poppedOutTodoNoteId = String(note.id);
-            flashBtn(popoutTodoBtn, '#0A84FF', 1200);
-        } else if (result && result.message) {
+if (popoutTodoBtn) {
+    popoutTodoBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+            const title = '待办事项';
+            const result = await window.api.popOutTodo('global-todos', title, todos.slice());
+            if (result && result.success) {
+                poppedOutTodoNoteId = 'global-todos';
+                flashBtn(popoutTodoBtn, '#0A84FF', 1200);
+            } else if (result && result.message) {
+                flashBtn(popoutTodoBtn, '#FF453A');
+            }
+        } catch (_) {
             flashBtn(popoutTodoBtn, '#FF453A');
         }
-    } catch (_) {
-        flashBtn(popoutTodoBtn, '#FF453A');
-    }
-});
+    });
+}
 
-// 待办小窗口更新 → 同步回主窗口的 note.todos 并触发重渲染 + 自动保存
-// 使用 todoSaveTimer 独立计时器，避免与 handleContentInput 的 saveTimer 交叉覆盖
+// 待办小窗口更新 → 同步回主窗口全局 todos 并触发重渲染 + 保存
 window.api.onPopoutTodoUpdate((data) => {
-    if (!data || !data.noteId) return;
-    const note = getCurrentNote();
-    if (note && String(note.id) === String(data.noteId)) {
-        if (Array.isArray(data.todos)) {
-            note.todos = data.todos;
-            note.updatedAt = now();
-            contentDirty = true;
-            renderTodoList();
-            renderNoteList();
-            // 防抖保存（独立计时器，避免与 handleContentInput 的 saveTimer 互相覆盖）
-            if (todoSaveTimer) clearTimeout(todoSaveTimer);
-            todoSaveTimer = setTimeout(async () => {
-                todoSaveTimer = null;
-                contentDirty = false;
-                await saveNotesToDisk();
-            }, 400);
-        }
+    if (!data) return;
+    if (Array.isArray(data.todos)) {
+        todos = data.todos;
+        renderTodoList();
+        if (typeof pushTodosToPopoutIfOpen === 'function') pushTodosToPopoutIfOpen();
+        saveTodosToDisk();
     }
 });
 
 // 待办小窗口关闭 → 清理标记
 window.api.onPopoutTodoClose((data) => {
-    if (!data || !data.noteId) return;
-    if (poppedOutTodoNoteId === String(data.noteId)) {
+    if (!data) return;
+    if (poppedOutTodoNoteId === 'global-todos') {
         poppedOutTodoNoteId = null;
     }
 });
 
 // 主窗口改了待办 → 实时推送给待办小窗口（如果已扯出）
 function pushTodosToPopoutIfOpen() {
-    const note = getCurrentNote();
-    if (!note || !note.id) return;
     if (typeof window.api.pushTodosToPopout !== 'function') return;
     try {
-        window.api.pushTodosToPopout(String(note.id), (note.todos || []).slice());
+        window.api.pushTodosToPopout('global-todos', todos.slice());
     } catch (e) { console.warn('推送待办到弹窗失败:', e.message); }
 }
 
@@ -3885,16 +3905,98 @@ function renderTrashList() {
     });
 }
 
+const todoArchiveFolderBtn = $('todoArchiveFolderBtn');
+const todoArchiveModal = $('todoArchiveModal');
+const todoArchiveCloseBtn = $('todoArchiveCloseBtn');
+const todoArchiveList = $('todoArchiveList');
+const todoArchiveCount = $('todoArchiveCount');
+const todoArchiveSearchInput = $('todoArchiveSearchInput');
+
+/**
+ * 渲染待办归档文件夹列表（支持搜索关键字过滤）
+ */
+function renderTodoArchiveList() {
+    renderFolderList({
+        listEl: todoArchiveList,
+        countEl: todoArchiveCount,
+        items: archivedTodos,
+        keyword: todoArchiveSearchKeyword,
+        emptyText: '暂无归档待办',
+        searchEmptyText: '没有匹配的待办',
+        titleFn: function(t) { return escapeHtml(t.text); },
+        metaFn: function(t) {
+            var time = escapeHtml(formatTodoTime(t.createdAt || t.id));
+            var archTime = t.archivedAt ? escapeHtml(formatTodoTime(t.archivedAt)) : '';
+            return '创建: ' + time + (archTime ? ' | 归档: ' + archTime : '');
+        },
+        searchTextFn: function(t) { return t.text || ''; },
+        restoreAction: 'restore-todo-archive',
+        deleteAction: 'delete-todo-archive',
+        restoreTitle: '恢复到待办列表',
+        infoAction: null
+    });
+}
+
+// 打开待办归档文件夹
+if (todoArchiveFolderBtn) {
+    todoArchiveFolderBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        todoArchiveSearchKeyword = '';
+        if (todoArchiveSearchInput) todoArchiveSearchInput.value = '';
+        renderTodoArchiveList();
+        todoArchiveModal.classList.add('open');
+    });
+}
+
+// 待办归档搜索
+if (todoArchiveSearchInput) {
+    bindFolderSearch(todoArchiveSearchInput, function(val) { todoArchiveSearchKeyword = val; }, renderTodoArchiveList);
+}
+
+// 关闭待办归档模态框
+if (todoArchiveModal && todoArchiveCloseBtn) {
+    bindModalClose(todoArchiveModal, todoArchiveCloseBtn);
+}
+
+// 待办归档列表事件委托：还原 / 永久删除
+if (todoArchiveList) {
+    todoArchiveList.addEventListener('click', async (e) => {
+        const actionEl = e.target.closest('[data-action]');
+        if (!actionEl) return;
+        const item = e.target.closest('.folder-item');
+        if (!item || !item.dataset.id) return;
+        const id = Number(item.dataset.id);
+        const action = actionEl.dataset.action;
+        if (action === 'restore-todo-archive') {
+            const t = archivedTodos.find(x => x.id === id);
+            if (t) {
+                delete t.archivedAt;
+                todos.unshift(t);
+                archivedTodos = archivedTodos.filter(x => x.id !== id);
+                await saveArchivedTodosToDisk();
+                await saveTodosToDisk();
+                renderTodoList();
+                renderTodoArchiveList();
+                pushTodosToPopoutIfOpen();
+            }
+        } else if (action === 'delete-todo-archive') {
+            archivedTodos = archivedTodos.filter(x => x.id !== id);
+            await saveArchivedTodosToDisk();
+            renderTodoArchiveList();
+        }
+    });
+}
 // 工具栏：打开归档文件夹
-archiveFolderBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    // 打开时清空搜索框，显示全部
-    archiveSearchKeyword = '';
-    const archiveSearchInput = $('archiveSearchInput');
-    if (archiveSearchInput) archiveSearchInput.value = '';
-    renderArchiveList();
-    archiveModal.classList.add('open');
-});
+if (archiveFolderBtn) {
+    archiveFolderBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        archiveSearchKeyword = '';
+        const archiveSearchInput = $('archiveSearchInput');
+        if (archiveSearchInput) archiveSearchInput.value = '';
+        renderArchiveList();
+        archiveModal.classList.add('open');
+    });
+}
 
 // 工具栏：打开垃圾桶
 trashFolderBtn.addEventListener('click', (e) => {

@@ -24,11 +24,13 @@ function getPopoutCommonCss() {
     return `
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.titlebar-actions{display:flex;align-items:center;-webkit-app-region:no-drag}
 .tb-btn{
     width:22px;height:22px;border:none;background:transparent;
     border-radius:4px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
     color:#666;transition:all 0.15s ease;margin-left:4px;
     user-select:none;-webkit-user-select:none;
+    -webkit-app-region:no-drag;
 }
 .tb-btn:hover{background:rgba(0,0,0,0.08);color:#1A1A1A}
 .tb-btn.pin.active{color:#FF9500;background:rgba(255,149,0,0.15)}

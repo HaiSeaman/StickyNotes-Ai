@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld('api', {
     loadTrashedNotes: makeInvoke('notes:load-trashed'),
     saveTrashedNotes: makeInvoke('notes:save-trashed'),
 
+    /* ===== 独立待办事项数据 ===== */
+    loadTodos: makeInvoke('todos:load'),
+    saveTodos: makeInvoke('todos:save'),
+    loadArchivedTodos: makeInvoke('todos:load-archived'),
+    saveArchivedTodos: makeInvoke('todos:save-archived'),
+
     /* ===== 聊天归档/垃圾桶（独立 JSON 持久化，与便签归档/垃圾桶一致）===== */
     loadArchivedChats: makeInvoke('chat:load-archived'),
     saveArchivedChats: makeInvoke('chat:save-archived'),

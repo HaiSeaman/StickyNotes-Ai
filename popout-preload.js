@@ -34,7 +34,7 @@ contextBridge.exposeInMainWorld('popout', {
     // 切换置顶
     togglePin: (payload) => ipcRenderer.invoke('popout:toggle-pin', payload),
     // 关闭窗口
-    close: () => window.close(),
+    close: () => ipcRenderer.send('popout:close-current'),
     // 主进程推送内容更新（主窗口内容变了 → 推给小窗口）
     onPush: (cb) => {
         const handler = safeCb(cb);

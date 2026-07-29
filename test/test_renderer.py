@@ -40,12 +40,18 @@ window.addEventListener('unhandledrejection', function(e) {
 // Mock window.api - 返回合理默认值
 window.api = {
     // 便签数据
-    loadNotes: async () => [{ id: 'test-1', content: '测试便签', todos: [], createdAt: '2026-07-29T00:00:00Z', updatedAt: '2026-07-29T00:00:00Z' }],
+    loadNotes: async () => [{ id: 'test-1', content: '测试便签', createdAt: '2026-07-29T00:00:00Z', updatedAt: '2026-07-29T00:00:00Z' }],
     saveNotes: async () => true,
     loadArchivedNotes: async () => [],
     saveArchivedNotes: async () => true,
     loadTrashedNotes: async () => [],
     saveTrashedNotes: async () => true,
+
+    // 待办事项数据
+    loadTodos: async () => [{ id: 'todo-1', text: '测试待办', done: false, createdAt: Date.now(), updatedAt: Date.now() }],
+    saveTodos: async () => true,
+    loadArchivedTodos: async () => [],
+    saveArchivedTodos: async () => true,
 
     // 聊天归档
     loadArchivedChats: async () => [],
@@ -145,10 +151,12 @@ window.api = {
     pushNoteToPopout: () => {},
     onPopoutNoteUpdate: (cb) => () => {},
     onPopoutNoteClose: (cb) => () => {},
+    onPopoutNoteClosed: (cb) => () => {},
     popOutTodo: async () => true,
     pushTodosToPopout: () => {},
     onPopoutTodoUpdate: (cb) => () => {},
     onPopoutTodoClose: (cb) => () => {},
+    onPopoutTodoClosed: (cb) => () => {},
 
     // 日志
     getLogs: async () => [],

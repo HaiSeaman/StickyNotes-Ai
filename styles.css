@@ -633,36 +633,22 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
 }
 .todo-item .todo-check:hover{border-color:var(--accent);background:rgba(127,179,179,0.1)}
 .todo-item .todo-check.checked{background:linear-gradient(135deg, #7fb3b3, #6ba3c9);border-color:transparent;color:#fff;box-shadow:0 2px 6px rgba(127,179,179,0.4)}
-.todo-item .todo-text{flex:1;word-break:break-word;user-select:text;-webkit-user-select:text;transition:all 0.2s var(--ease)}
+.todo-item .todo-content-wrap{display:flex;flex-direction:column;flex:1;min-width:0}
+.todo-item .todo-time{font-size:10px;color:var(--text-4);margin-top:2px;user-select:none;-webkit-user-select:none}
+.todo-item .todo-text{word-break:break-word;user-select:text;-webkit-user-select:text;transition:all 0.2s var(--ease)}
 .todo-item .todo-text.done{text-decoration:line-through;color:var(--text-4)}
-.todo-item .todo-del{
+.todo-item .todo-del,
+.todo-item .todo-archive-btn{
     width:22px;height:22px;border:none;background:transparent;
     color:var(--text-4);cursor:pointer;border-radius:5px;
     display:flex;align-items:center;justify-content:center;font-size:11px;
     opacity:0;transition:all 0.18s var(--ease);flex-shrink:0;
+    margin-left:2px;
 }
-.todo-item:hover .todo-del{opacity:1}
+.todo-item:hover .todo-del,
+.todo-item:hover .todo-archive-btn{opacity:1}
+.todo-item .todo-archive-btn:hover{background:rgba(127,179,179,0.18);color:var(--accent)}
 .todo-item .todo-del:hover{background:rgba(224,139,139,0.2);color:var(--accent-rose)}
-/* 延期按钮（未完成待办 hover 时显示） */
-.todo-item .todo-defer{
-    width:22px;height:22px;border:none;background:transparent;
-    color:var(--text-4);cursor:pointer;border-radius:5px;
-    display:flex;align-items:center;justify-content:center;
-    opacity:0;transition:all 0.18s var(--ease);flex-shrink:0;padding:0;
-}
-.todo-item:hover .todo-defer{opacity:1}
-.todo-item .todo-defer:hover{background:rgba(255,159,10,0.18);color:#FF9F0A}
-/* 延期待办的视觉样式 */
-.todo-item.deferred{
-    opacity:0.7;border-left:2px solid #FF9F0A;padding-left:8px;
-    background:rgba(255,159,10,0.04);
-}
-.todo-item.deferred:hover{background:rgba(255,159,10,0.08);opacity:0.85}
-.todo-defer-badge{
-    display:inline-block;background:rgba(255,159,10,0.22);color:#FF9F0A;
-    font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;
-    margin-right:6px;vertical-align:1px;letter-spacing:0.3px;
-}
 .todo-input-wrap{
     display:flex;align-items:center;padding:8px 14px 10px;gap:8px;
     border-top:1px solid var(--border);
@@ -697,6 +683,8 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
     transition:all 0.2s var(--ease);padding:0;
 }
 .note-tool-btn:hover{background:var(--surface-hover);color:var(--accent);border-color:var(--accent);transform:translateY(-1px)}
+.note-tool-btn.todo-archive-folder-btn:hover{background:rgba(127,179,179,0.18);color:#5A9E9E;border-color:#5A9E9E}
+.note-tool-btn.note-archive-folder-btn:hover{background:rgba(230,204,178,0.3);color:#D97706;border-color:#D97706}
 .note-tool-btn:active{transform:translateY(0)}
 .note-tool-btn.disabled{opacity:0.4;cursor:not-allowed;pointer-events:none}
 .todo-add-btn{
@@ -1010,6 +998,7 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
 .backup-modal.open{display:flex}
 
 /* ==================== 归档/垃圾桶文件夹模态框 ==================== */
+/* ---------------- 模态框基础与差异化设计 ---------------- */
 .folder-modal{
     position:fixed;inset:0;z-index:102;
     background:rgba(170,200,200,0.3);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
@@ -1022,6 +1011,50 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
     background:rgba(250,249,246,0.98);border:1px solid var(--border-strong);
     border-radius:var(--radius);box-shadow:var(--shadow-lg);
     display:flex;flex-direction:column;
+}
+
+/* --- 1. 待办归档文件夹：极简青绿清单风 (Modern Checklist Archive) --- */
+#todoArchiveModal .folder-card {
+    background: rgba(245, 249, 248, 0.98);
+    border: 1px solid rgba(127, 179, 179, 0.35);
+    box-shadow: 0 12px 32px rgba(127, 179, 179, 0.15), 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+#todoArchiveModal .folder-header {
+    background: linear-gradient(135deg, rgba(127, 179, 179, 0.12), rgba(107, 163, 201, 0.08));
+    border-bottom: 1px solid rgba(127, 179, 179, 0.2);
+}
+#todoArchiveModal .folder-title {
+    color: #3b6e6e;
+    font-weight: 700;
+}
+#todoArchiveModal .folder-count {
+    background: rgba(127, 179, 179, 0.25);
+    color: #2b5555;
+}
+#todoArchiveModal .search-input:focus {
+    box-shadow: 0 0 0 2px rgba(127, 179, 179, 0.25);
+}
+
+/* --- 2. 便签归档文件夹：经典暖色牛皮纸风 (Classic Kraft Note Archive) --- */
+#archiveModal .folder-card {
+    background: rgba(253, 250, 242, 0.98);
+    border: 1px solid rgba(212, 178, 140, 0.4);
+    box-shadow: 0 12px 32px rgba(212, 178, 140, 0.2), 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+#archiveModal .folder-header {
+    background: linear-gradient(135deg, rgba(230, 204, 178, 0.3), rgba(221, 184, 146, 0.18));
+    border-bottom: 1px solid rgba(212, 178, 140, 0.3);
+}
+#archiveModal .folder-title {
+    color: #7c522b;
+    font-weight: 700;
+}
+#archiveModal .folder-count {
+    background: rgba(198, 147, 94, 0.22);
+    color: #6d421d;
+}
+#archiveModal .search-input:focus {
+    box-shadow: 0 0 0 2px rgba(198, 147, 94, 0.25);
 }
 .folder-header{
     display:flex;align-items:center;justify-content:space-between;
