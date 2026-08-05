@@ -1,7 +1,7 @@
 import {
   Note,
   NoteHistorySnapshot,
-  TodoGroup,
+  TodoItem,
   ActivityData,
   UserSettings,
   SyncConfig,
@@ -16,11 +16,10 @@ import {
  * ipcRenderer.invoke / ipcMain.handle 类型的双向通信契约表
  */
 export interface IpcChannelMap {
-  // 独立独立便签与待办窗口
+  // 独立便签与待办窗口
   'note:popout': (data: { noteId: string; title: string; content: string }) => boolean;
-  'note:close-popout': (noteId: string) => boolean;
   'todo:popout': (data: { noteId: string; title: string; todos: unknown }) => boolean;
-  'todo:close-popout': (noteId: string) => boolean;
+  'popout:close-by-id': (params: { noteId: string; type?: 'note' | 'todo' }) => boolean;
   'popout:toggle-pin': (params: { noteId: string; type: 'note' | 'todo' }) => boolean;
 
   // 数据持久化（便签/待办/聊天/日历/活跃度/设置）
@@ -30,10 +29,12 @@ export interface IpcChannelMap {
   'notes:save-archived': (notes: Note[]) => boolean;
   'notes:load-trashed': () => Note[];
   'notes:save-trashed': (notes: Note[]) => boolean;
-  'todos:load': () => TodoGroup[];
-  'todos:save': (todos: TodoGroup[]) => boolean;
-  'todos:load-archived': () => TodoGroup[];
-  'todos:save-archived': (todos: TodoGroup[]) => boolean;
+  'todos:load': () => TodoItem[];
+  'todos:save': (todos: TodoItem[]) => boolean;
+  'todos:load-archived': () => TodoItem[];
+  'todos:save-archived': (todos: TodoItem[]) => boolean;
+  'chat:load': () => unknown[];
+  'chat:save': (chats: unknown[]) => boolean;
   'chat:load-archived': () => unknown[];
   'chat:save-archived': (chats: unknown[]) => boolean;
   'chat:load-trashed': () => unknown[];
@@ -73,7 +74,9 @@ export interface IpcChannelMap {
   'lock:set-pin': (pin: string) => boolean;
   'lock:verify-pin': (pin: string) => boolean;
   'lock:has-pin': () => boolean;
-  'lock:clear-pin': () => boolean;
+  'lock:clear-pin': (pin?: string) => { success: boolean; message?: string };
+  'lock:set-app-locked': (locked: boolean) => boolean;
+  'lock:is-app-locked': () => boolean;
   'startup:set': (open: boolean) => boolean;
   'startup:get': () => boolean;
 
@@ -91,6 +94,7 @@ export interface IpcChannelMap {
   'chat:abort': () => void;
   'chat:save-image': (dataUrl: string) => string;
   'chat:delete-image': (fileName: string) => boolean;
+  'chat:delete-images-batch': (paths: string[]) => { success: boolean; deletedCount?: number; error?: string };
   'ai:save-custom-size': (size: string) => boolean;
   'ai:load-custom-size': () => string;
   'ai:save-image-config': (config: ImageConfig) => boolean;

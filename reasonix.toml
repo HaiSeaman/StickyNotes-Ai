@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash=find src -type f | sort && echo \"---LINES---\" && find src -name \"*.ts\" -o -name \"*.mts\" | xargs wc -l | tail -5", "Bash=wc -l $(find src -name \"*.ts\" -o -name \"*.mts\" | sort) | sort -rn"]

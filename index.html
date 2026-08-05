@@ -2,11 +2,10 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<!-- L17 说明：media-src 包含 http: 是为支持网络电台 HTTP 流（电台服务普遍仅 HTTP），属已知可接受风险 -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https:; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: chatimg: musicfile: https:; media-src 'self' data: musicfile: https: http:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'">
 <title>便签</title>
-<link rel="stylesheet" href="styles/variables.css">
-    <link rel="stylesheet" href="styles/components.css">
-    <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <div class="window" id="window">
@@ -435,7 +434,13 @@
                                 <img class="music-cover" id="musicCover" alt="" aria-hidden="true">
                             </div>
                             <div class="music-info">
-                                <div class="music-track-title" id="musicTrackTitle">未播放</div>
+                                <div class="music-track-title-row">
+                                    <div class="music-track-title" id="musicTrackTitle">未播放</div>
+                                    <button class="music-track-fav-btn" id="musicTrackFavBtn" title="收藏当前曲目" aria-label="收藏当前曲目" disabled>
+                                        <svg class="icon-fav-outline" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                                        <svg class="icon-fav-solid" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M12 .587l3.668 7.431 8.332 1.21-6 5.847 1.416 8.252L12 18.896l-7.416 4.431L6 15.075 0 9.228l8.332-1.21z"/></svg>
+                                    </button>
+                                </div>
                                 <div class="music-track-artist" id="musicTrackArtist">—</div>
                             </div>
                         </div>
@@ -975,16 +980,7 @@
     </div>
 </div>
 
-<script src="shared-utils.js" defer></script>
-<script src="constants/appConstants.js" defer></script>
-<script src="renderer/utils.js" defer></script>
-<script src="renderer/tabs/calendar.js" defer></script>
-<script src="renderer/tabs/music-tab.js" defer></script>
-<script src="renderer/tabs/radio-tab.js" defer></script>
-<script src="renderer/tabs/chatTab.js" defer></script>
-<script src="renderer/tabs/createTab.js" defer></script>
-<script src="renderer/securityPin.js" defer></script>
-<script src="renderer/themePalette.js" defer></script>
-<script src="renderer.js" defer></script>
+<!-- 渲染层入口：Vite 构建时会将此 module 脚本打包为生产版本 -->
+<script type="module" src="/src/renderer/main.ts"></script>
 </body>
 </html>

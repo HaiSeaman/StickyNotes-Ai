@@ -38,16 +38,6 @@ export interface TodoItem {
   createdAt: number;
 }
 
-export interface TodoGroup {
-  id: string;
-  title: string;
-  items: TodoItem[];
-  color?: string;
-  isPinned?: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
-
 /**
  * 活跃度追踪数据模型
  */
@@ -58,22 +48,6 @@ export interface ActivityData {
     aiChatsCount?: number;
     activeMinutes?: number;
   };
-}
-
-/**
- * 用户个性化设置模型
- */
-export interface UserSettings {
-  theme?: string;
-  fontSize?: number;
-  fontFamily?: string;
-  autoStart?: boolean;
-  alwaysOnTop?: boolean;
-  closeToTray?: boolean;
-  hotkeyToggle?: string;
-  syncInterval?: number;
-  soundEnabled?: boolean;
-  [key: string]: unknown;
 }
 
 /**
@@ -117,16 +91,31 @@ export interface ImageConfig {
 }
 
 /**
- * 音频与电台模型
+ * 用户设置模型
+ */
+export interface UserSettings {
+  bgColor?: string | null;
+  detailFontSize?: number;
+  alarmVolume?: number;
+  launchAtLogin?: boolean;
+  [key: string]: unknown;
+}
+
+/**
+ * 音乐元数据
  */
 export interface MusicMetadata {
-  title: string;
-  artist: string;
-  album: string;
-  duration: number;
+  title?: string;
+  artist?: string;
+  album?: string;
+  duration?: number;
   filePath: string;
   coverArtUrl?: string;
 }
+
+/**
+ * 电台模型
+ */
 
 export interface RadioStation {
   id: string;

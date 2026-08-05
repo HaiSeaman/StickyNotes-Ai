@@ -1,6 +1,7 @@
 import http from 'http';
 import https from 'https';
 import { SyncConfig } from '../../types/index.js';
+import { trimTrailingSlash } from '../lib/shared-utils.js';
 
 export interface WebdavRequestContext {
   baseUrl: string;
@@ -32,10 +33,6 @@ export interface WebdavBackupItem {
   lastModified: string;
 }
 
-export function trimTrailingSlash(urlStr: string): string {
-  return (urlStr || '').replace(/\/+$/, '');
-}
-
 export function buildWebdavRequestContext(config: SyncConfig): WebdavRequestContext {
   const baseUrl = trimTrailingSlash(config.url || '');
   const auth = Buffer.from(`${config.user || ''}:${config.pass || ''}`).toString('base64');
@@ -51,6 +48,10 @@ export function buildWebdavRequestContext(config: SyncConfig): WebdavRequestCont
   const lib = urlObj.protocol === 'https:' ? https : http;
   if (urlObj.protocol === 'http:') {
     console.warn('[安全警告] WebDAV 使用 http:// 明文协议，Basic Auth 凭据将以明文传输，建议改用 https://');
+  }
+  // M1 修复：allowSelfSigned 完全禁用 TLS 证书验证，输出持久警告日志提醒用户 MITM 风险
+  if (allowSelfSigned && urlObj.protocol === 'https:') {
+    console.warn('[安全警告] WebDAV 已禁用 TLS 证书验证（allowSelfSigned=true），连接容易遭受中间人攻击，仅建议在测试环境使用');
   }
   const agent = new (lib as any).Agent({ rejectUnauthorized: !allowSelfSigned });
 
@@ -70,6 +71,11 @@ export function webdavRequest(
 
   return new Promise((resolve, reject) => {
     const ctx = buildWebdavRequestContext(config);
+    // M8 修复：请求完成后清理凭据引用，避免长期驻留堆内存
+    const cleanupCtx = () => {
+      ctx.auth = '';
+      try { ctx.agent.destroy(); } catch (_) {}
+    };
     const opts = {
       method,
       hostname: ctx.urlObj.hostname,
@@ -85,7 +91,7 @@ export function webdavRequest(
       if (maxSize > 0) {
         const contentLength = parseInt((res.headers['content-length'] as string) || '0', 10);
         if (contentLength > maxSize) {
-          try { ctx.agent.destroy(); } catch (_) {}
+          cleanupCtx();
           try { req.destroy(); } catch (_) {}
           reject(new Error(`备份文件过大（${(contentLength / 1024 / 1024).toFixed(1)}MB），超过 ${(maxSize / 1024 / 1024).toFixed(0)}MB 上限`));
           return;
@@ -100,7 +106,7 @@ export function webdavRequest(
         totalSize += c.length;
         if (maxSize > 0 && totalSize > maxSize) {
           aborted = true;
-          try { ctx.agent.destroy(); } catch (_) {}
+          cleanupCtx();
           try { req.destroy(); } catch (_) {}
           reject(new Error(`下载过程中超过 ${(maxSize / 1024 / 1024).toFixed(0)}MB 上限，已中断`));
           return;
@@ -110,7 +116,7 @@ export function webdavRequest(
 
       res.on('end', () => {
         if (aborted) return;
-        try { ctx.agent.destroy(); } catch (_) {}
+        cleanupCtx();
         resolve({
           statusCode: res.statusCode,
           statusMessage: res.statusMessage,
@@ -118,11 +124,20 @@ export function webdavRequest(
           body: Buffer.concat(chunks)
         });
       });
+
+      // H5 修复：监听响应流错误，防 Promise 悬挂（连接重置等网络错误）
+      res.on('error', (err: Error) => {
+        if (aborted) return;
+        aborted = true;
+        cleanupCtx();
+        try { req.destroy(); } catch (_) {}
+        reject(err);
+      });
     });
 
     req.on('timeout', () => { req.destroy(new Error('请求超时')); });
     req.on('error', (err) => {
-      try { ctx.agent.destroy(); } catch (_) {}
+      cleanupCtx();
       reject(err);
     });
 
@@ -142,7 +157,9 @@ export function parseWebdavPropfindXml(bodyStr: string): WebdavBackupItem[] {
     if (!hrefMatch) continue;
 
     const href = hrefMatch[2];
-    const decodedHref = decodeURIComponent(href);
+    // H5 修复：decodeURIComponent 对无效百分号编码会抛 URIError，包裹 try/catch 防解析崩溃
+    let decodedHref: string;
+    try { decodedHref = decodeURIComponent(href); } catch (_) { decodedHref = href; }
     if (!decodedHref.endsWith('.zip')) continue;
 
     const name = decodedHref.split('/').pop();

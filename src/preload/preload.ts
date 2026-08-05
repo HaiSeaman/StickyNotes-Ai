@@ -31,6 +31,8 @@ export const api = {
     loadArchivedTodos: makeInvoke('todos:load-archived'),
     saveArchivedTodos: makeInvoke('todos:save-archived'),
 
+    loadChats: makeInvoke('chat:load'),
+    saveChats: makeInvoke('chat:save'),
     loadArchivedChats: makeInvoke('chat:load-archived'),
     saveArchivedChats: makeInvoke('chat:save-archived'),
     loadTrashedChats: makeInvoke('chat:load-trashed'),
@@ -77,6 +79,7 @@ export const api = {
 
     saveChatImage: makeInvoke('chat:save-image'),
     deleteChatImage: makeInvoke('chat:delete-image'),
+    deleteChatImagesBatch: (paths: string[]) => ipcRenderer.invoke('chat:delete-images-batch', paths),
 
     saveImageConfig: makeInvoke('ai:save-image-config'),
     loadImageConfig: makeInvoke('ai:load-image-config'),
@@ -95,6 +98,8 @@ export const api = {
     verifyLockPin: makeInvoke('lock:verify-pin'),
     hasLockPin: makeInvoke('lock:has-pin'),
     clearLockPin: makeInvoke('lock:clear-pin'),
+    setAppLocked: makeInvoke('lock:set-app-locked'),
+    isAppLocked: makeInvoke('lock:is-app-locked'),
 
     setLaunchAtLogin: makeInvoke('startup:set'),
     getLaunchAtLogin: makeInvoke('startup:get'),
@@ -114,6 +119,7 @@ export const api = {
     onPopoutNoteClose: makeListener('popout-note:closed'),
 
     popOutTodo: (noteId: string, title: string, todos: any[]) => ipcRenderer.invoke('todo:popout', { noteId, title, todos }),
+    closePopoutWindow: (noteId: string, type?: 'note' | 'todo') => ipcRenderer.invoke('popout:close-by-id', { noteId, type }),
     pushTodosToPopout: (noteId: string, todos: any[]) => ipcRenderer.send('popout-todo:push-from-main', { noteId, todos }),
     onPopoutTodoUpdate: makeListener('popout-todo:update'),
     onPopoutTodoClose: makeListener('popout-todo:closed'),

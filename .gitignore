@@ -5,6 +5,5 @@ node_modules
 .DS_Store
 .idea
 dist/
-dist
-test/screenshots/
-test/screenshots_full/
+dist-renderer/
+dist-app/
