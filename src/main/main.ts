@@ -35,6 +35,7 @@ import { getOverlayLoggerScript, getPopoutCommonCss, buildPopoutHtml } from './l
 
 import {
     isSafeExternalUrlAsync,
+    isPrivateOrLoopbackHost,
     escapeHtmlFull,
 } from './lib/security.js';
 
@@ -117,19 +118,19 @@ export async function parseSSEStream(resp: any, onChunk: (chunk: any) => void): 
             const { done, value } = await reader.read();
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-            for (const rawLine of lines) {
+            let sepIdx: number;
+            while ((sepIdx = buffer.indexOf('\n')) >= 0) {
+                const rawLine = buffer.slice(0, sepIdx);
+                buffer = buffer.slice(sepIdx + 1);
                 const line = rawLine.trim();
-                if (!line || line.startsWith(':')) continue;
-                if (!line.startsWith('data:')) continue;
+                if (!line || line.startsWith(':') || !line.startsWith('data:')) continue;
                 const data = line.slice(5).trim();
-                if (data === '[DONE]') continue;
-                try { onChunk(JSON.parse(data)); } catch (e: any) { console.warn('解析SSE行失败:', e.message); }
+                if (data === '[DONE]' || !data) continue;
+                try { onChunk(JSON.parse(data)); } catch (_) { /* 静默跳过格式错误的 chunk */ }
             }
         }
     } finally {
-        try { reader.releaseLock(); } catch (e: any) { console.warn('释放流锁失败:', e.message); }
+        try { reader.releaseLock(); } catch (_) {}
     }
 }
 
@@ -344,13 +345,13 @@ function createWindow(): void {
 
     const startHidden = process.argv.includes('--hidden');
     let windowShown = false;
-    mainWindow.once('ready-to-show', () => {
-        if (startHidden) { windowShown = true; return; }
-        if (!windowShown) { windowShown = true; mainWindow!.show(); }
-    });
-    setTimeout(() => {
-        if (!windowShown && !startHidden && mainWindow) { windowShown = true; mainWindow.show(); }
-    }, 5000);
+    const showWindow = () => {
+        if (windowShown || startHidden) return;
+        windowShown = true;
+        mainWindow!.show();
+    };
+    mainWindow.once('ready-to-show', showWindow);
+    setTimeout(showWindow, 5000);
 
     try {
         const taskbarIcon = createSunIcon(32);
@@ -751,14 +752,35 @@ export async function decryptSecret(encrypted: string, label?: string): Promise<
     }
 }
 
+// 掩码前缀：U+200B 零宽空格 + 4 个 ••••
+// 零宽空格在真实凭据（base64/hex/API Key）中几乎不可能出现，
+// 因此前缀匹配比"后缀是否可打印 ASCII"的启发式可靠得多，不会误判。
+// 修复：此前仅用 '••••' 前缀 + ASCII 启发式，导致：
+//   1) ≤4 字符凭据的掩码恰好是 '••••'，isMaskedCred 判定为 false，掩码被当新凭据加密覆盖原密码；
+//   2) 含中文/emoji 的凭据，掩码后缀非 ASCII，同样被判 false 覆盖原密码。
+const MASK_PREFIX = '\u200B••••';
+const LEGACY_MASK_PREFIX = '••••';
+
 export function maskCred(cred: string): string {
     if (!cred) return '';
-    if (cred.length <= 4) return '••••';
-    return '••••' + cred.slice(-4);
+    if (cred.length <= 4) return MASK_PREFIX;
+    return MASK_PREFIX + cred.slice(-4);
 }
 
 export function isMaskedCred(value: string): boolean {
-    return typeof value === 'string' && value.startsWith('••••');
+    if (typeof value !== 'string') return false;
+    // 新格式：U+200B 前缀（唯一可靠，真实凭据不可能以零宽空格开头）
+    if (value.startsWith(MASK_PREFIX)) return true;
+    // 旧格式兼容（迁移期）：'••••' 开头的掩码。
+    // '••••' 恰好 4 字符（≤4 字符凭据的旧掩码）也认；
+    // 更长的保持旧启发式（后缀须为纯可打印 ASCII），避免误判真实凭据。
+    if (value.startsWith(LEGACY_MASK_PREFIX)) {
+        if (value.length === LEGACY_MASK_PREFIX.length) return true;
+        if (value.length > LEGACY_MASK_PREFIX.length) {
+            return /^[\x20-\x7E]+$/.test(value.slice(LEGACY_MASK_PREFIX.length));
+        }
+    }
+    return false;
 }
 
 /* ==================== 通用工具函数 ==================== */
@@ -792,28 +814,62 @@ async function safeFetch(url: string, options?: any): Promise<Response> {
     }
 }
 
+// 备份时额外包含的子目录（相对 userData）：便签历史快照、聊天图片
+const BACKUP_SUBDIRS = ['note_history', 'chat-images'];
+
 async function getBackupFiles(): Promise<any[]> {
     const dir = app.getPath('userData');
-    let entries: string[] = [];
+    const result: any[] = [];
+    // 顶层 *.json
     try {
-        entries = await fs.promises.readdir(dir);
+        const entries = await fs.promises.readdir(dir);
+        const candidates = entries
+            .filter(name => name.endsWith('.json'))
+            .filter(name => !name.endsWith('.tmp'))
+            .filter(name => !name.includes('.corrupt-'))
+            .map(name => ({ name, path: path.join(dir, name) }));
+        for (const f of candidates) {
+            try {
+                const stat = await fs.promises.stat(f.path);
+                if (stat.isFile()) result.push(f);
+            } catch (e: any) { console.warn('获取文件信息失败:', e.message); }
+        }
     } catch (e: any) {
         console.error('扫描备份目录失败:', e.message);
-        return [];
     }
-    const candidates = entries
-        .filter(name => name.endsWith('.json'))
-        .filter(name => !name.endsWith('.tmp'))
-        .filter(name => !name.includes('.corrupt-'))
-        .map(name => ({ name, path: path.join(dir, name) }));
-    const result: any[] = [];
-    for (const f of candidates) {
+    // 白名单子目录（递归，保留相对路径作为 zip entry 名）
+    for (const sub of BACKUP_SUBDIRS) {
+        const subDir = path.join(dir, sub);
+        if (!fs.existsSync(subDir)) continue;
         try {
-            const stat = await fs.promises.stat(f.path);
-            if (stat.isFile()) result.push(f);
-        } catch (e: any) { console.warn('获取文件信息失败:', e.message); }
+            await collectDirFiles(subDir, sub, result, 20000);
+        } catch (e: any) {
+            console.warn('扫描子目录失败 ' + sub + ':', e.message);
+        }
     }
     return result;
+}
+
+async function collectDirFiles(absDir: string, relPrefix: string, out: any[], maxEntries: number): Promise<void> {
+    let entries: string[];
+    try {
+        entries = await fs.promises.readdir(absDir);
+    } catch (_) { return; }
+    for (const name of entries) {
+        if (out.length >= maxEntries) {
+            console.warn('备份文件数量达到上限 ' + maxEntries + '，停止收集');
+            return;
+        }
+        const abs = path.join(absDir, name);
+        const rel = relPrefix + '/' + name;
+        let stat: any;
+        try { stat = await fs.promises.stat(abs); } catch (_) { continue; }
+        if (stat.isDirectory()) {
+            await collectDirFiles(abs, rel, out, maxEntries);
+        } else if (stat.isFile()) {
+            out.push({ name: rel, path: abs });
+        }
+    }
 }
 
 async function createBackupZip(): Promise<Buffer> {
@@ -821,11 +877,12 @@ async function createBackupZip(): Promise<Buffer> {
     const zip = new AdmZip();
     const files = await getBackupFiles();
     if (files.length === 0) throw new Error('没有可备份的数据文件');
+    const MAX_SINGLE_FILE = 50 * 1024 * 1024; // 单文件 50MB 上限
     for (const f of files) {
         try {
             const stat = await fs.promises.stat(f.path);
-            if (stat.size > MAX_BACKUP_SIZE) {
-                console.warn('跳过超大文件 ' + f.name + '（' + (stat.size/1024/1024).toFixed(1) + 'MB > 200MB 上限）');
+            if (stat.size > MAX_SINGLE_FILE) {
+                console.warn('跳过超大文件 ' + f.name + '（' + (stat.size/1024/1024).toFixed(1) + 'MB > 50MB 单文件上限）');
                 continue;
             }
             const content = await fs.promises.readFile(f.path);
@@ -980,16 +1037,16 @@ async function downloadS3Backup(config: any, key: string): Promise<Buffer> {
 /* ==================== WebDAV 上传/测试/列出/删除/下载 ==================== */
 function uploadToWebdav(config: any, zipBuffer: Buffer, fileName: string): Promise<{ success: boolean, location: string }> {
     const baseUrl = trimTrailingSlash(config.url);
-    const auth = Buffer.from(config.user + ':' + config.pass).toString('base64');
     const pathPrefix = normalizePathPrefix(config.path);
     const dirPath = joinWebdavPath(baseUrl, pathPrefix);
     const filePath = joinWebdavPath(baseUrl, pathPrefix, fileName);
     if (!dirPath || !filePath) {
         return Promise.reject(new Error('WebDAV 地址或路径格式错误，无法解析'));
     }
+    // P1 修复 C2：不再手动计算 auth，webdavRequest 自动从 config.user/config.pass 注入
     let mkcolError: string | null = null;
     const mkcolPromise = pathPrefix
-        ? webdavRequest(config as any, 'MKCOL', dirPath, { headers: { 'Authorization': 'Basic ' + auth }, timeoutMs: 15000 } as any)
+        ? webdavRequest(config as any, 'MKCOL', dirPath, { timeoutMs: 15000 } as any)
             .then((r: any) => {
                 if (r.statusCode === 201 || r.statusCode === 405 || (r.statusCode >= 200 && r.statusCode < 300)) {
                     return;
@@ -1006,7 +1063,6 @@ function uploadToWebdav(config: any, zipBuffer: Buffer, fileName: string): Promi
     return mkcolPromise.then(() => {
         return webdavRequest(config as any, 'PUT', filePath, {
             headers: {
-                'Authorization': 'Basic ' + auth,
                 'Content-Type': 'application/zip',
                 'Content-Length': zipBuffer.length
             },
@@ -1025,16 +1081,15 @@ function uploadToWebdav(config: any, zipBuffer: Buffer, fileName: string): Promi
 
 function testWebdavConnection(config: any): Promise<{ success: boolean, message: string }> {
     const baseUrl = trimTrailingSlash(config.url);
-    const auth = Buffer.from(config.user + ':' + config.pass).toString('base64');
     const pathPrefix = normalizePathPrefix(config.path);
     const fullPath = joinWebdavPath(baseUrl, pathPrefix);
     if (!fullPath) {
         return Promise.reject(new Error('WebDAV 地址或路径格式错误，无法解析'));
     }
     const body = '<?xml version="1.0"?><propfind xmlns="DAV:"><prop/></propfind>';
+    // P1 修复 C2：不再手动计算 auth，webdavRequest 自动从 config.user/config.pass 注入
     return webdavRequest(config as any, 'PROPFIND', fullPath, {
         headers: {
-            'Authorization': 'Basic ' + auth,
             'Depth': '1',
             'Content-Type': 'application/xml; charset=utf-8'
         },
@@ -1059,16 +1114,15 @@ function testWebdavConnection(config: any): Promise<{ success: boolean, message:
 
 function listWebdavBackups(config: any): Promise<any[]> {
     const baseUrl = trimTrailingSlash(config.url);
-    const auth = Buffer.from(config.user + ':' + config.pass).toString('base64');
     const pathPrefix = normalizePathPrefix(config.path);
     const fullPath = joinWebdavPath(baseUrl, pathPrefix);
     if (!fullPath) {
         return Promise.reject(new Error('WebDAV 地址或路径格式错误，无法解析'));
     }
     const body = '<?xml version="1.0"?><propfind xmlns="DAV:"><prop><displayname/><getcontentlength/><getlastmodified/></prop></propfind>';
+    // P1 修复 C2：不再手动计算 auth
     return webdavRequest(config as any, 'PROPFIND', fullPath, {
         headers: {
-            'Authorization': 'Basic ' + auth,
             'Depth': '1',
             'Content-Type': 'application/xml; charset=utf-8'
         },
@@ -1085,9 +1139,8 @@ function listWebdavBackups(config: any): Promise<any[]> {
 }
 
 function deleteWebdavBackup(config: any, href: string): Promise<{ success: boolean }> {
-    const auth = Buffer.from(config.user + ':' + config.pass).toString('base64');
+    // P1 修复 C2：不再手动计算 auth
     return webdavRequest(config as any, 'DELETE', href, {
-        headers: { 'Authorization': 'Basic ' + auth },
         timeoutMs: 15000
     } as any).then((res: any) => {
         if (res.statusCode === 204 || res.statusCode === 200 || (res.statusCode >= 200 && res.statusCode < 300)) {
@@ -1102,9 +1155,8 @@ function deleteWebdavBackup(config: any, href: string): Promise<{ success: boole
 }
 
 function downloadWebdavBackup(config: any, href: string): Promise<Buffer> {
-    const auth = Buffer.from(config.user + ':' + config.pass).toString('base64');
+    // P1 修复 C2：不再手动计算 auth
     return webdavRequest(config as any, 'GET', href, {
-        headers: { 'Authorization': 'Basic ' + auth },
         timeoutMs: 60000,
         maxSize: MAX_BACKUP_SIZE
     } as any).then((res: any) => {
@@ -1150,7 +1202,8 @@ export const providers: any = {
                 user: raw.user || '',
                 pass,
                 path: raw.path || '',
-                allowSelfSigned: !!raw.allowSelfSigned
+                allowSelfSigned: !!raw.allowSelfSigned,
+                trustedCertFingerprint: raw.trustedCertFingerprint || ''
             };
         },
         test: (config: any) => testWebdavConnection(config),
@@ -1181,11 +1234,24 @@ export async function performSync(providerKey: string): Promise<{ provider: stri
         return { provider: provider.label, fileName, size: zipBuffer.length, location: result.location };
     } finally {
         if (targetConfig) {
-            targetConfig.pass = null;
-            targetConfig.secretKey = null;
-            targetConfig.accessKey = null;
-            targetConfig.user = null;
+            // P0 修复 C3：安全清理敏感字段
+            // 注意：JS 字符串不可变，这里使用 Buffer 来尽量清除内存中的凭据
+            const sensitiveKeys = ['pass', 'secretKey', 'accessKey', 'user'] as const;
+            for (const key of sensitiveKeys) {
+                const val = targetConfig[key];
+                if (val && typeof val === 'string') {
+                    // 尝试覆盖（最佳努力：字符串不可变，但可消除引用）
+                    try {
+                        // 用随机数据填充一个相同长度的 Buffer，然后尝试覆盖
+                        const buf = Buffer.from(val, 'utf-8');
+                        crypto.randomBytes(buf.length).copy(buf);
+                    } catch (_) {}
+                }
+                targetConfig[key] = '';
+                targetConfig[key] = null;
+            }
         }
+        targetConfig = null;
         isSyncing = false;
     }
 }
@@ -1227,14 +1293,21 @@ export function scheduleAutoSync(): void {
 export const LOCK_MAX_ATTEMPTS = 5;
 export const LOCK_COOLDOWN_MS = 30000;
 
+// 内存中的失败计数（防 settings.json 删除绕过）
+let inMemoryLockFailCount = 0;
+let inMemoryLockCooldownUntil = 0;
+
 export function loadLockState(): void {
     try {
         const s = loadSettings();
-        sharedState.lockFailCount = Number(s.lockFailCount) || 0;
-        sharedState.lockCooldownUntil = Number(s.lockCooldownUntil) || 0;
+        // 取内存和文件中的较大值，防止删除 settings.json 重置
+        sharedState.lockFailCount = Math.max(Number(s.lockFailCount) || 0, inMemoryLockFailCount);
+        sharedState.lockCooldownUntil = Math.max(Number(s.lockCooldownUntil) || 0, inMemoryLockCooldownUntil);
         if (sharedState.lockCooldownUntil && Date.now() > sharedState.lockCooldownUntil) {
             sharedState.lockFailCount = 0;
             sharedState.lockCooldownUntil = 0;
+            inMemoryLockFailCount = 0;
+            inMemoryLockCooldownUntil = 0;
             delete s.lockFailCount;
             delete s.lockCooldownUntil;
             persistSettings();
@@ -1245,10 +1318,20 @@ export function loadLockState(): void {
 export function persistLockState(): void {
     try {
         const s = loadSettings();
-        if (sharedState.lockFailCount > 0) s.lockFailCount = sharedState.lockFailCount;
-        else delete s.lockFailCount;
-        if (sharedState.lockCooldownUntil > Date.now()) s.lockCooldownUntil = sharedState.lockCooldownUntil;
-        else delete s.lockCooldownUntil;
+        if (sharedState.lockFailCount > 0) {
+            s.lockFailCount = sharedState.lockFailCount;
+            inMemoryLockFailCount = sharedState.lockFailCount;
+        } else {
+            delete s.lockFailCount;
+            inMemoryLockFailCount = 0;
+        }
+        if (sharedState.lockCooldownUntil > Date.now()) {
+            s.lockCooldownUntil = sharedState.lockCooldownUntil;
+            inMemoryLockCooldownUntil = sharedState.lockCooldownUntil;
+        } else {
+            delete s.lockCooldownUntil;
+            inMemoryLockCooldownUntil = 0;
+        }
         persistSettings();
     } catch (e: any) { console.warn('持久化锁定状态失败:', e.message); }
 }
@@ -1283,7 +1366,7 @@ export const HISTORY_MAX_PER_NOTE = 10;
 export const HISTORY_MIN_INTERVAL_MS = 60 * 1000;
 let HISTORY_DIR: string = '';
 
-const noteHistoryCache = new Map<any, any[]>();
+export const noteHistoryCache = new Map<any, any[]>();
 const noteHistoryDirty = new Set<any>();
 
 function ensureHistoryDir(): void {
@@ -1406,9 +1489,11 @@ export function saveImageToDisk(dataUrl: string, cfg: any): void {
     try {
         const saveDir = (cfg && (cfg.imageSavePath || cfg.dashscopeSavePath)) || app.getPath('userData');
         if (!fs.existsSync(saveDir)) { fs.mkdirSync(saveDir, { recursive: true }); }
-        const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+        const base64Data = dataUrl.replace(/^data:image\/[\w.+-]+;base64,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
-        const fileName = 'ai_image_' + Date.now() + '.png';
+        // 修复：按图片真实格式决定扩展名（此前固定 .png，JPEG 内容存成 .png 会损坏无法打开）
+        const ext = sniffImageExt(buffer);
+        const fileName = 'ai_image_' + Date.now() + ext;
         const filePath = path.join(saveDir, fileName);
         fs.writeFileSync(filePath, buffer);
         console.log('图片已保存:', path.basename(filePath));
@@ -1417,13 +1502,15 @@ export function saveImageToDisk(dataUrl: string, cfg: any): void {
     }
 }
 
-async function fetchImageAsDataUrl(url: string, cfg: any): Promise<string> {
+export async function fetchImageAsDataUrl(url: string, cfg: any): Promise<string> {
     const imgResp = await fetch(url, { signal: AbortSignal.timeout(30000) });
     if (!imgResp.ok) {
         throw new Error('图片下载失败 HTTP ' + imgResp.status + ': ' + imgResp.statusText);
     }
-    const imgBuf = await imgResp.arrayBuffer();
-    const dataUrl = 'data:image/png;base64,' + Buffer.from(imgBuf).toString('base64');
+    const imgBuf = Buffer.from(await imgResp.arrayBuffer());
+    // 修复：按 Content-Type + 魔数嗅探生成正确 MIME 的 dataURL，
+    // 避免实际为 JPEG/WebP 的图片被硬编码为 image/png 导致后续复制失败
+    const dataUrl = bufferToImageDataUrl(imgBuf, imgResp.headers.get('content-type') || '');
     saveImageToDisk(dataUrl, cfg);
     return dataUrl;
 }
@@ -1669,16 +1756,62 @@ export function buildOpenAiImageUrl(baseUrl: string, imagePath: string): string 
     return trimmed + '/v1' + imagePath;
 }
 
+/* ==================== 文件 MIME 类型映射 ==================== */
+const IMAGE_MIME_MAP: any = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp'
+};
+
+/* ==================== 图片格式嗅探工具 ====================
+ * 修复：此前下载的图片一律被硬编码为 data:image/png;base64,...
+ * 若实际是 JPEG/WebP，MIME 声明与数据不符会导致：
+ *   1. nativeImage.createFromDataURL 返回空图 → 复制图片失败
+ *   2. saveImageToDisk 存成 .png 扩展名 → 文件实际损坏打不开
+ * 以下工具按二进制魔数嗅探真实格式，Content-Type 仅作兜底。
+ */
+export function sniffImageMime(buffer: Buffer, fallbackMime = 'image/png'): string {
+    if (!buffer || buffer.length === 0) return fallbackMime;
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return 'image/png';
+    // JPEG: FF D8 FF
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+    // WebP: RIFF .... WEBP
+    if (buffer.length >= 12 && buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46
+        && buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) return 'image/webp';
+    // GIF: 47 49 46 38
+    if (buffer.length >= 4 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) return 'image/gif';
+    // BMP: 42 4D
+    if (buffer.length >= 2 && buffer[0] === 0x42 && buffer[1] === 0x4d) return 'image/bmp';
+    return fallbackMime;
+}
+
+export function sniffImageExt(buffer: Buffer): string {
+    switch (sniffImageMime(buffer, '')) {
+        case 'image/jpeg': return '.jpg';
+        case 'image/webp': return '.webp';
+        case 'image/gif': return '.gif';
+        case 'image/bmp': return '.bmp';
+        default: return '.png';
+    }
+}
+
+/** 由图片二进制构造 dataURL：优先使用服务端 Content-Type，魔数嗅探兜底，避免 MIME 声明与数据不符 */
+export function bufferToImageDataUrl(buffer: Buffer, contentType?: string): string {
+    let declared = '';
+    if (contentType) {
+        const mime = contentType.split(';')[0].trim().toLowerCase();
+        if (/^image\/[\w.+-]+$/.test(mime)) declared = mime;
+    }
+    const mime = sniffImageMime(buffer, declared || 'image/png');
+    return 'data:' + mime + ';base64,' + buffer.toString('base64');
+}
+
 /* ==================== 音乐模块常量 ==================== */
 export const MUSIC_AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.weba', '.webm'];
 export const MUSIC_MIME_MAP: any = {
     '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
     '.flac': 'audio/flac', '.aac': 'audio/aac', '.m4a': 'audio/mp4',
     '.weba': 'audio/webm', '.webm': 'audio/webm'
-};
-const IMAGE_MIME_MAP: any = {
-    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-    '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp'
 };
 
 /* ==================== FM 收音机模块 ==================== */
@@ -1708,6 +1841,15 @@ export function radioHttpGet(urlStr: string, timeoutMs?: number): Promise<{ data
         }
         const lib: any = parsed.protocol === 'https:' ? https : (parsed.protocol === 'http:' ? http : null);
         if (!lib) return reject(new Error('不支持的协议: ' + parsed.protocol));
+        // M7 修复：SSRF 防护 — 复用 security.ts 的统一实现 isPrivateOrLoopbackHost，
+        // 覆盖 IPv4-mapped/十进制整数 IP(如 2130706433=127.0.0.1)、RFC1918、
+        // 环回 127/8、链路本地 169.254/16、0.0.0.0/8、CGNAT 100.64/10、广播、
+        // IPv6 ULA/link-local、.local/.internal 等（内联实现此前遗漏了其中多项）。
+        // 注意：URL.hostname 对 IPv6 返回带方括号形式，isPrivateOrLoopbackHost 内部会剥离。
+        const host = parsed.hostname.toLowerCase();
+        if (isPrivateOrLoopbackHost(host)) {
+            return reject(new Error('安全限制：不允许访问内网/本地地址'));
+        }
         let resRef: any = null;
         const req = lib.get(parsed, {
             headers: { 'User-Agent': 'StickyNotes/7.4', 'Accept': 'application/json' },

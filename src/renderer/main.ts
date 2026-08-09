@@ -70,6 +70,7 @@ const chatInput = $<HTMLTextAreaElement>('chatInput');
 const chatSendBtn = $<HTMLButtonElement>('chatSendBtn');
 const chatRegenBtn = $<HTMLButtonElement>('chatRegenBtn');
 const chatThinkingBtn = $<HTMLButtonElement>('chatThinkingBtn');
+const chatWebSearchBtn = $<HTMLButtonElement>('chatWebSearchBtn');
 const chatUploadBtn = $<HTMLButtonElement>('chatUploadBtn');
 const chatFileInput = $<HTMLInputElement>('chatFileInput');
 const chatAttachments = $<HTMLElement>('chatAttachments');
@@ -751,26 +752,34 @@ async function switchNote(id: number): Promise<void> {
     renderEditor();
 }
 
+// 修复：新建便签重入锁，防止快速连续点击时在 await saveNotesToDisk 期间重复 push 空便签
+let createNoteInProgress = false;
 async function createNote(): Promise<void> {
-    // 取消挂起的自动保存定时器，防止新建后回调把内容写到新便签
-    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-    // 修复：删除/归档/切换/新建便签时刷新并清理 pushTimer，避免旧便签的延迟推送破坏新便签状态
-    flushPopoutPush();
-    if (contentDirty && currentNoteId) {
-        const cur = getCurrentNote();
-        if (cur) { cur.content = noteInput.value; cur.updatedAt = now(); contentDirty = false; }
-    }
-    const newNote = { id: genId(), content: '', createdAt: now(), updatedAt: now() };
-    notes.push(newNote);
-    currentNoteId = newNote.id;
-    await saveNotesToDisk();
-    renderNoteList();
-    renderEditor();
-    renderTodoList();
-    noteInput.focus();
-    // 埋点：新建便签算一次编辑
-    if (window.api && window.api.incrementActivity) {
-        try { window.api.incrementActivity('note'); } catch (e: any) { console.warn('便签埋点上报失败:', e.message); }
+    if (createNoteInProgress) return;
+    createNoteInProgress = true;
+    try {
+        // 取消挂起的自动保存定时器，防止新建后回调把内容写到新便签
+        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+        // 修复：删除/归档/切换/新建便签时刷新并清理 pushTimer，避免旧便签的延迟推送破坏新便签状态
+        flushPopoutPush();
+        if (contentDirty && currentNoteId) {
+            const cur = getCurrentNote();
+            if (cur) { cur.content = noteInput.value; cur.updatedAt = now(); contentDirty = false; }
+        }
+        const newNote = { id: genId(), content: '', createdAt: now(), updatedAt: now() };
+        notes.push(newNote);
+        currentNoteId = newNote.id;
+        await saveNotesToDisk();
+        renderNoteList();
+        renderEditor();
+        renderTodoList();
+        noteInput.focus();
+        // 埋点：新建便签算一次编辑
+        if (window.api && window.api.incrementActivity) {
+            try { window.api.incrementActivity('note'); } catch (e: any) { console.warn('便签埋点上报失败:', e.message); }
+        }
+    } finally {
+        createNoteInProgress = false;
     }
 }
 
@@ -894,7 +903,8 @@ async function addTodo(): Promise<void> {
 async function toggleTodo(id: number): Promise<void> {
     const t = todos.find(x => x.id === id);
     if (!t) return;
-    t.done = !t.done;
+    const wasDone = t.done;
+    t.done = !wasDone;
     t.updatedAt = now();
     if (t.done) {
         t.completedAt = now();
@@ -904,7 +914,8 @@ async function toggleTodo(id: number): Promise<void> {
     saveTodosToDiskDebounced();
     renderTodoList();
     pushTodosToPopoutIfOpen();
-    if (t.done && window.api && window.api.incrementActivity) {
+    // 修复：仅当本次由「未完成→完成」时计数，快速来回勾选不再虚高活动统计
+    if (!wasDone && t.done && window.api && window.api.incrementActivity) {
         try { window.api.incrementActivity('todo'); } catch (e: any) { console.warn('待办埋点上报失败:', e.message); }
     }
 }
@@ -2044,7 +2055,12 @@ function createMessageDom(msg: any): HTMLElement {
     const bubble = document.createElement('div');
     bubble.className = 'chat-msg-bubble';
     if (msg.error) bubble.classList.add('error');
-    bubble.textContent = msg.content;
+    // assistant 回复一律走智能渲染：折叠正文中模型输出的"已为您搜索/来源引文"冗长块（不依赖 sources）
+    if (msg.role === 'assistant' && !msg.error) {
+        renderContentWithCitations(bubble, msg.content, msg.sources);
+    } else {
+        bubble.textContent = msg.content;
+    }
     // AI 回复气泡内追加统计信息（模型/耗时/Token + 一键复制按钮），位于气泡左下角
     if (msg.role === 'assistant' && !msg.error && msg.stats && msg.stats.model) {
         bubble.appendChild(buildStatsDom(msg.stats, msg.content));
@@ -2068,6 +2084,168 @@ function createMessageDom(msg: any): HTMLElement {
  * @param contentForCopy - 用于复制的原始 AI 回复内容
  * @returns DOM 元素
  */
+
+/**
+ * 构建参考来源卡片容器 DOM (Perplexity / 豆包风格)
+ * 默认折叠以防止大段引文占满屏幕
+ */
+function buildSourcesDom(sources: any[]): HTMLElement | null {
+    if (!Array.isArray(sources) || sources.length === 0) return null;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-sources-wrap'; // 默认折叠，不加 expanded
+
+    const header = document.createElement('div');
+    header.className = 'chat-sources-header';
+    header.innerHTML = `<span class="chat-sources-title">📚 参考来源 (${sources.length})</span><span class="chat-sources-toggle">展开 ▼</span>`;
+    header.addEventListener('click', () => {
+        const isExp = wrap.classList.toggle('expanded');
+        const toggleSpan = header.querySelector('.chat-sources-toggle');
+        if (toggleSpan) toggleSpan.textContent = isExp ? '折叠 ▲' : '展开 ▼';
+    });
+
+    const grid = document.createElement('div');
+    grid.className = 'chat-sources-grid';
+
+    sources.forEach((src: any) => {
+        const card = document.createElement('div');
+        card.className = 'chat-source-card';
+        card.setAttribute('data-index', String(src.index));
+        card.title = `${src.title}\n${src.url}\n${src.snippet || ''}`;
+
+        const titleRow = document.createElement('div');
+        titleRow.className = 'chat-source-card-title';
+        titleRow.textContent = `[${src.index}] ${src.title || src.domain || '网页链接'}`;
+
+        const metaRow = document.createElement('div');
+        metaRow.className = 'chat-source-card-meta';
+        const domainSpan = document.createElement('span');
+        domainSpan.className = 'chat-source-domain';
+        domainSpan.textContent = `🌐 ${src.domain || '网页'}`;
+        metaRow.appendChild(domainSpan);
+
+        card.appendChild(titleRow);
+        card.appendChild(metaRow);
+
+        card.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (src.url && /^https?:\/\//i.test(src.url)) {
+                if (window.api?.openExternalUrl) {
+                    window.api.openExternalUrl(src.url);
+                } else {
+                    window.open(src.url, '_blank', 'noopener,noreferrer');
+                }
+            }
+        });
+
+        grid.appendChild(card);
+    });
+
+    wrap.appendChild(header);
+    wrap.appendChild(grid);
+    return wrap;
+}
+
+/**
+ * 辅助函数：创建可折叠的搜索/引文块
+ */
+function createFoldBlock(title: string, content: string): HTMLElement {
+    const block = document.createElement('div');
+    block.className = 'chat-fold-block';
+
+    const header = document.createElement('div');
+    header.className = 'chat-fold-header';
+    header.innerHTML = `<span>${title}</span><span class="chat-fold-toggle">展开 ▼</span>`;
+    header.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isExp = block.classList.toggle('expanded');
+        const toggleSpan = header.querySelector('.chat-fold-toggle');
+        if (toggleSpan) toggleSpan.textContent = isExp ? '折叠 ▲' : '展开 ▼';
+    });
+
+    const body = document.createElement('div');
+    body.className = 'chat-fold-content';
+    body.textContent = content.trim();
+
+    block.appendChild(header);
+    block.appendChild(body);
+    return block;
+}
+
+/**
+ * 渲染带引用角标 [1] 的富文本 / Markdown 内容，并智能折叠正文中大段搜索引文
+ */
+function renderContentWithCitations(container: HTMLElement, rawText: string, sources: any[]) {
+    container.textContent = '';
+    if (!rawText) return;
+
+    // 智能识别并拆分正文中的搜索/引文块，例如：
+    // 1. **🔍 已为您搜索：** ... 或 🔍 已为您搜索：...
+    // 2. **🌐 来源引文：** ... 或 🌐 来源引文：...
+    // 折叠块不依赖 sources 数组：即使模型自带 Grounding 输出（应用内无 sources）也会被折叠
+    const foldPattern = /(\*{0,2}(?:🔍|🌐)\s*(?:已为您搜索|搜索关键词|来源引文|参考来源)[：:]\*{0,2}[\s\S]*?(?=(?:\n\*{0,2}(?:🔍|🌐)\s*(?:已为您搜索|搜索关键词|来源引文|参考来源)[：:]|\n\n[^\n]|(?:\n(?![\[0-9\s]))|$)))/g;
+
+    const sections = rawText.split(foldPattern);
+
+    sections.forEach(sec => {
+        if (!sec) return;
+
+        // 如果是已为您搜索块：折叠为「🔍 搜索关键词」，内容剥离前缀只保留关键词
+        if (/^\*{0,2}🔍\s*(?:已为您搜索|搜索关键词)[：:]/i.test(sec.trim())) {
+            const lines = sec.trim().split('\n');
+            const headerText = lines[0].replace(/\*/g, '').trim();
+            // 剥离 "🔍 已为您搜索：" 前缀，只保留实际关键词
+            const keyword = headerText.replace(/^🔍\s*(?:已为您搜索|搜索关键词)\s*[：:]\s*/i, '').trim() || headerText;
+            const detailText = lines.slice(1).join('\n') || keyword;
+            container.appendChild(createFoldBlock('🔍 搜索关键词', detailText));
+            return;
+        }
+
+        // 如果是来源引文块：折叠为「🌐 来源引文」，内容为引文列表
+        if (/^\*{0,2}🌐\s*(?:来源引文|参考来源)[：:]/i.test(sec.trim())) {
+            const lines = sec.trim().split('\n');
+            const detailText = lines.slice(1).join('\n') || sec.trim();
+            const count = (detailText.match(/^\[\d+\]/gm) || []).length;
+            container.appendChild(createFoldBlock(`🌐 来源引文${count ? `（${count} 条）` : ''}`, detailText));
+            return;
+        }
+
+        // 普通正文内容：匹配 [1], [2], [1, 2] 等角标
+        const parts = sec.split(/(\[(?:[0-9]+(?:\s*,\s*[0-9]+)*)\])/g);
+
+        parts.forEach(part => {
+            const match = part.match(/^\[((?:[0-9]+(?:\s*,\s*[0-9]+)*))\]$/);
+            if (match) {
+                const indices = match[1].split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+                indices.forEach(idx => {
+                    const sourceItem = sources?.find((s: any) => s.index === idx);
+                    if (!sourceItem) {
+                        // 无对应来源（如模型自带 Grounding 输出）时，按普通文本显示
+                        container.appendChild(document.createTextNode(`[${idx}]`));
+                        return;
+                    }
+                    const badge = document.createElement('span');
+                    badge.className = 'citation-badge';
+                    badge.textContent = String(idx);
+                    badge.setAttribute('data-source-index', String(idx));
+                    badge.title = `[${idx}] ${sourceItem.title}\n${sourceItem.snippet || sourceItem.url}`;
+                    badge.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (sourceItem.url && window.api?.openExternalUrl) {
+                            window.api.openExternalUrl(sourceItem.url);
+                        } else if (sourceItem.url) {
+                            window.open(sourceItem.url, '_blank');
+                        }
+                    });
+                    container.appendChild(badge);
+                });
+            } else {
+                container.appendChild(document.createTextNode(part));
+            }
+        });
+    });
+}
+
 function buildStatsDom(stats: any, contentForCopy: string): HTMLElement {
     const el = document.createElement('div');
     el.className = 'chat-msg-stats';
@@ -2155,10 +2333,15 @@ function appendMessageDom(msg: any): void {
 // 移除光标、写入最终内容、补充时间 meta；错误时把气泡标红
 // 同时处理思考区：写入最终 reasoning，若无 reasoning 则移除空思考区（避免残留"正在思考..."占位）
 // 新增：在气泡内左下角追加统计信息（模型/耗时/Token），仅非错误且有数据时显示
-function finalizeStreamDom(streamWrap: any, streamBubble: any, finalContent: string, isError: boolean, finalReasoning: string, stats: any): void {
+function finalizeStreamDom(streamWrap: any, streamBubble: any, finalContent: string, isError: boolean, finalReasoning: string, stats: any, sources: any[] = []): void {
     if (!streamWrap || !streamBubble) return;
     if (isError) streamBubble.classList.add('error');
-    streamBubble.textContent = finalContent;
+    // 非错误一律走智能渲染（折叠冗长搜索/引文块，不依赖 sources 是否存在）
+    if (!isError) {
+        renderContentWithCitations(streamBubble, finalContent, sources);
+    } else {
+        streamBubble.textContent = finalContent;
+    }
     // 非错误且有统计数据时，在气泡内追加统计信息（含一键复制按钮）
     if (!isError && stats && stats.model) {
         streamBubble.appendChild(buildStatsDom(stats, finalContent));
@@ -2185,7 +2368,8 @@ function finalizeStreamDom(streamWrap: any, streamBubble: any, finalContent: str
 
 function newChat(): void {
     const chat = {
-        id: Date.now(),
+        // 修复：改用带单调计数器的 genId()，避免同毫秒内快速新建产生相同 id 导致会话错乱
+        id: genId(),
         title: '新对话',
         messages: [],
         createdAt: Date.now(),
@@ -2319,6 +2503,8 @@ async function migrateChatImagesToDisk(): Promise<void> {
 
 // 思考模式开关状态
 let chatThinkingEnabled = false;
+let chatWebSearchEnabled = false;
+let currentChatSources: any[] = [];
 // 当前待发送的附件列表：[{name, path, isImage}]（图片落盘后只存 path，不持有 base64）
 let chatAttachmentsList: any[] = [];
 
@@ -2439,9 +2625,33 @@ async function sendChat(): Promise<void> {
  * sendChat 追加用户消息后调用；regenerateLastReply 删除旧回复后调用。
  * @param chat - 当前会话对象（messages 已就绪，不含待生成的 assistant 回复）
  */
-function createStreamPlaceholder(showThinking: boolean): any {
+function createStreamPlaceholder(showThinking: boolean = false, showWebSearch: boolean = false): {
+    streamWrap: HTMLElement;
+    streamBubble: HTMLElement;
+    thinkingEl: HTMLElement | null;
+    thinkingBodyEl: HTMLElement | null;
+    searchStatusEl: HTMLElement | null;
+    sourcesWrapEl: HTMLElement | null;
+} {
     const streamWrap = document.createElement('div');
     streamWrap.className = 'chat-msg assistant';
+
+    let searchStatusEl: any = null;
+    let sourcesWrapEl: any = null;
+
+    // 搜索状态胶囊
+    searchStatusEl = document.createElement('div');
+    searchStatusEl.className = 'chat-search-status';
+    searchStatusEl.style.display = 'none';
+    searchStatusEl.innerHTML = '<span class="search-icon">🔍</span><span class="search-text">正在检索网络信息...</span>';
+    streamWrap.appendChild(searchStatusEl);
+
+    // 来源卡片容器
+    sourcesWrapEl = document.createElement('div');
+    sourcesWrapEl.className = 'chat-sources-wrap expanded';
+    sourcesWrapEl.style.display = 'none';
+    streamWrap.appendChild(sourcesWrapEl);
+
     let thinkingEl: any = null, thinkingBodyEl: any = null;
     if (showThinking) {
         thinkingEl = document.createElement('div');
@@ -2463,7 +2673,7 @@ function createStreamPlaceholder(showThinking: boolean): any {
     streamWrap.appendChild(streamBubble);
     chatMessages.appendChild(streamWrap);
     chatMessages.scrollTop = chatMessages.scrollHeight;
-    return { streamWrap, streamBubble, thinkingEl, thinkingBodyEl };
+    return { streamWrap, streamBubble, thinkingEl, thinkingBodyEl, searchStatusEl, sourcesWrapEl };
 }
 
 function buildChatSendMessages(chat: any): any[] {
@@ -2487,10 +2697,11 @@ async function streamAssistantReply(chat: any): Promise<void> {
     chatInput.disabled = true;
     setSendButtonState(true);
 
-    const { streamWrap, streamBubble, thinkingEl, thinkingBodyEl } = createStreamPlaceholder(chatThinkingEnabled);
+    const { streamWrap, streamBubble, thinkingEl, thinkingBodyEl, searchStatusEl, sourcesWrapEl } = createStreamPlaceholder(chatThinkingEnabled, chatWebSearchEnabled);
 
     let streamedContent = '';
     let streamedReasoning = '';
+    let streamedSources: any[] = [];
     let firstContentReceived = false;
 
     // 智能滚动 & rAF 渲染调度控制
@@ -2511,7 +2722,8 @@ async function streamAssistantReply(chat: any): Promise<void> {
             reasoningDirty = false;
         }
         if (contentDirty && streamBubble) {
-            streamBubble.textContent = streamedContent + '▌';
+            // 流式渲染同样走智能渲染：既支持 [1] 角标（有 sources 时），也折叠模型输出的搜索/引文冗长块
+            renderContentWithCitations(streamBubble, streamedContent + '▌', streamedSources);
             contentDirty = false;
         }
         if (userNearBottom) {
@@ -2526,7 +2738,26 @@ async function streamAssistantReply(chat: any): Promise<void> {
     };
 
     const removeChunkListener = window.api.onChatChunk((chunk: any) => {
-        if (chunk.type === 'reasoning' && thinkingBodyEl) {
+        if (chunk.type === 'searching' && searchStatusEl) {
+            searchStatusEl.style.display = 'flex';
+            const textEl = searchStatusEl.querySelector('.search-text');
+            if (textEl) textEl.textContent = `正在搜索: "${chunk.query || ''}"...`;
+            if (thinkingEl) thinkingEl.classList.remove('expanded');
+        } else if (chunk.type === 'sources') {
+            streamedSources = chunk.sources || [];
+            if (searchStatusEl) {
+                const textEl = searchStatusEl.querySelector('.search-text');
+                if (textEl) textEl.textContent = `已检索到 ${streamedSources.length} 篇参考资料，正在整合回答...`;
+            }
+            if (sourcesWrapEl && streamedSources.length > 0) {
+                sourcesWrapEl.style.display = 'block';
+                const dom = buildSourcesDom(streamedSources);
+                if (dom) {
+                    sourcesWrapEl.innerHTML = '';
+                    sourcesWrapEl.appendChild(dom);
+                }
+            }
+        } else if (chunk.type === 'reasoning' && thinkingBodyEl) {
             if (!streamedReasoning && chunk.text) {
                 thinkingBodyEl.textContent = '';
             }
@@ -2538,6 +2769,9 @@ async function streamAssistantReply(chat: any): Promise<void> {
                 firstContentReceived = true;
                 streamBubble.textContent = '';
                 if (thinkingEl) thinkingEl.classList.remove('expanded');
+                if (searchStatusEl) {
+                    searchStatusEl.style.opacity = '0.7';
+                }
             }
             streamedContent += chunk.text;
             contentDirty = true;
@@ -2547,9 +2781,14 @@ async function streamAssistantReply(chat: any): Promise<void> {
 
     try {
         const sendMessages = buildChatSendMessages(chat);
-        const result = await window.api.chat({ messages: sendMessages, thinking: chatThinkingEnabled });
+        const result = await window.api.chat({ 
+            messages: sendMessages, 
+            thinking: chatThinkingEnabled,
+            webSearch: chatWebSearchEnabled
+        });
         const finalContent = result.content || streamedContent || (result.aborted ? '（已中断）' : '（空回复）');
         const finalReasoning = result.reasoning || streamedReasoning || '';
+        const finalSources = (result.sources && result.sources.length > 0) ? result.sources : streamedSources;
         const stats = (result && result.model) ? {
             model: result.model,
             elapsedSec: ((result.elapsedMs || 0) / 1000).toFixed(1),
@@ -2559,6 +2798,7 @@ async function streamAssistantReply(chat: any): Promise<void> {
             role: 'assistant',
             content: finalContent,
             reasoning: finalReasoning,
+            sources: finalSources,
             ts: Date.now(),
             aborted: !!result.aborted,
             stats: stats
@@ -2570,7 +2810,7 @@ async function streamAssistantReply(chat: any): Promise<void> {
         chat.updatedAt = Date.now();
         saveChats();
         if (currentChatId === streamChatId) {
-            finalizeStreamDom(streamWrap, streamBubble, finalContent, false, finalReasoning, stats);
+            finalizeStreamDom(streamWrap, streamBubble, finalContent, false, finalReasoning, stats, finalSources);
         } else {
             if (streamWrap.parentNode) streamWrap.parentNode.removeChild(streamWrap);
         }
@@ -2582,7 +2822,7 @@ async function streamAssistantReply(chat: any): Promise<void> {
             chat.updatedAt = Date.now();
             saveChats();
             if (currentChatId === streamChatId) {
-                finalizeStreamDom(streamWrap, streamBubble, '请求失败：' + err.message, true, '', null);
+                finalizeStreamDom(streamWrap, streamBubble, '请求失败：' + err.message, true, '', null, []);
             } else if (streamWrap.parentNode) {
                 streamWrap.parentNode.removeChild(streamWrap);
             }
@@ -2686,6 +2926,16 @@ chatThinkingBtn.addEventListener('click', (e: any) => {
 });
 // mousedown 也触发一次，防止 click 被吞
 chatThinkingBtn.addEventListener('mousedown', (e: any) => { e.stopPropagation(); });
+
+// 联网搜索开关
+chatWebSearchBtn.addEventListener('click', (e: any) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chatWebSearchEnabled = !chatWebSearchEnabled;
+    chatWebSearchBtn.classList.toggle('active', chatWebSearchEnabled);
+    chatWebSearchBtn.title = chatWebSearchEnabled ? '已开启联网搜索（点击关闭）' : '开启/关闭联网搜索';
+});
+chatWebSearchBtn.addEventListener('mousedown', (e: any) => { e.stopPropagation(); });
 
 // 文件上传：通过隐藏 input[type=file] 触发文件选择
 chatUploadBtn.addEventListener('click', (e: any) => {
@@ -3587,6 +3837,7 @@ const webdavUser: any = $('webdavUser');
 const webdavPass: any = $('webdavPass');
 const webdavPath: any = $('webdavPath');
 const webdavAllowSelfSigned: any = $('webdavAllowSelfSigned');
+const webdavFingerprint: any = $('webdavFingerprint');
 const webdavSaveBtn: any = $('webdavSaveBtn');
 const webdavTestBtn: any = $('webdavTestBtn');
 const webdavSyncBtn: any = $('webdavSyncBtn');
@@ -3627,7 +3878,8 @@ function getWebdavConfigFromInputs(): any {
         user: webdavUser.value.trim(),
         pass: webdavPass.value,
         path: webdavPath.value.trim(),
-        allowSelfSigned: !!webdavAllowSelfSigned.checked
+        allowSelfSigned: !!webdavAllowSelfSigned.checked,
+        trustedCertFingerprint: webdavFingerprint.value.trim()
     };
 }
 
@@ -3649,6 +3901,7 @@ async function loadSyncConfigToUI(): Promise<void> {
             webdavPass.value = cfg.webdav.pass || '';
             webdavPath.value = cfg.webdav.path || '';
             webdavAllowSelfSigned.checked = !!cfg.webdav.allowSelfSigned;
+            webdavFingerprint.value = cfg.webdav.trustedCertFingerprint || '';
         }
         autoSyncToggle.checked = !!cfg.autoSync;
         autoSyncInterval.value = String(cfg.autoSyncInterval || 30);
@@ -4466,8 +4719,25 @@ chatTrashClearBtn.addEventListener('click', async (e: any) => {
 
 // 接收恢复完成通知（主进程通过 webContents.send 推送）
 if (window.api?.onRestoreDone) {
-    window.api.onRestoreDone((data: any) => {
+    window.api.onRestoreDone(async (data: any) => {
         setSyncStatus('已还原 ' + (data.restoredFiles || 0) + ' 个数据文件', 'success');
+        // 修复：恢复备份后重载内存数据（便签/待办/聊天），否则界面仍显示旧数据
+        try {
+            await loadNotesFromDisk();
+            renderNoteList();
+            renderEditor();
+            renderTodoList();
+            renderTodoArchiveList();
+            await loadChats();
+            await loadArchivedAndTrashedChats();
+            renderChatList();
+            renderMessages();
+            renderChatArchiveList();
+            renderChatTrashList();
+            setSyncStatus('已还原 ' + (data.restoredFiles || 0) + ' 个数据文件，数据已刷新', 'success');
+        } catch (e: any) {
+            console.warn('恢复后刷新数据失败:', e.message);
+        }
     });
 }
 

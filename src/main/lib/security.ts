@@ -2,6 +2,7 @@
  * 安全工具函数：IPC payload 大小校验、SSRF 防护（含 DNS 解析）、HTML 转义、API baseUrl 协议校验。
  * =============================================== */
 import dns from 'dns';
+import net from 'net';
 
 // IPC 单条 payload 大小上限：50MB
 export const MAX_IPC_PAYLOAD_SIZE = 50 * 1024 * 1024;
@@ -56,8 +57,23 @@ function isPrivateIp(ip: string): boolean {
     let h = ip.toLowerCase().trim();
     // 去除 IPv6 方括号
     if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
-    // IPv4-mapped IPv6
-    if (h.startsWith('::ffff:')) h = h.replace('::ffff:', '');
+    // IPv4-mapped/compatible IPv6：点分与十六进制压缩形式都归一化为点分 IPv4。
+    // 例：::ffff:127.0.0.1 / ::ffff:7f00:1 → 127.0.0.1；::7f00:1 → 127.0.0.1
+    if (h.startsWith('::ffff:') || h.startsWith('::')) {
+        const rest = h.startsWith('::ffff:') ? h.slice(7) : h.slice(2);
+        if (rest.includes('.')) {
+            h = rest;
+        } else {
+            const groups = rest.split(':');
+            if (groups.length <= 2 && groups.length >= 1 && groups.every(g => /^[0-9a-f]{1,4}$/.test(g))) {
+                const hex = groups.map(g => g.padStart(4, '0')).join('').padStart(8, '0');
+                if (hex.length === 8) {
+                    const n = parseInt(hex, 16);
+                    h = (n >>> 24) + '.' + ((n >> 16) & 255) + '.' + ((n >> 8) & 255) + '.' + (n & 255);
+                }
+            }
+        }
+    }
 
     // IPv4 归一化（处理十进制整数等绕过形式）
     if (/^\d+$/.test(h) && !h.includes(':')) {
@@ -104,14 +120,11 @@ function isPrivateIp(ip: string): boolean {
  * 校验 host 是否为内网/环回/链路本地地址（词法层面，不做 DNS 解析）。
  * 注意：无法防 DNS rebinding，对安全敏感场景请使用 isSafeExternalUrlAsync。
  */
-function isPrivateOrLoopbackHost(host: string): boolean {
+export function isPrivateOrLoopbackHost(host: string): boolean {
     if (!host) return true;
     let cleanHost = host.toLowerCase().trim();
     if (cleanHost.startsWith('[') && cleanHost.endsWith(']')) {
         cleanHost = cleanHost.slice(1, -1);
-    }
-    if (cleanHost.startsWith('::ffff:')) {
-        cleanHost = cleanHost.replace('::ffff:', '');
     }
     if (cleanHost === 'localhost' || cleanHost === '0.0.0.0' || cleanHost === '0' || cleanHost.endsWith('.local') || cleanHost.endsWith('.internal')) {
         return true;
@@ -120,9 +133,13 @@ function isPrivateOrLoopbackHost(host: string): boolean {
     if (/^\d+$/.test(cleanHost)) {
         cleanHost = normalizeIPv4(cleanHost);
     }
-    // 先按 IP 规则判断
-    if (isPrivateIp(cleanHost)) return true;
-    // IPv6 文本形式
+    // 仅对 IP 字面量做私网判定（isPrivateIp 内部处理 IPv4-mapped 点分/十六进制、
+    // RFC1918、环回、链路本地、CGNAT、广播等）。域名不做前缀匹配，
+    // 避免误伤数字开头的合法公网域名（如 10.example.com、127.fm）。
+    if (net.isIP(cleanHost) === 4 || net.isIP(cleanHost) === 6) {
+        return isPrivateIp(cleanHost);
+    }
+    // 纯 IPv6 文本（net.isIP 判不出时兜底常见内网前缀）
     if (cleanHost.includes(':')) {
         if (cleanHost === '::' || cleanHost === '::1') return true;
         // 链路本地 fe80::/10
@@ -130,19 +147,6 @@ function isPrivateOrLoopbackHost(host: string): boolean {
         // 唯一本地地址 fc00::/7
         if (/^f[cd][0-9a-f]{0,2}:/.test(cleanHost)) return true;
     }
-    // IPv4 点分形式
-    if (/^0\./.test(cleanHost) || /^127\./.test(cleanHost) || /^10\./.test(cleanHost) || /^169\.254\./.test(cleanHost) || /^192\.168\./.test(cleanHost)) {
-        return true;
-    }
-    if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(cleanHost)) {
-        return true;
-    }
-    // 运营商级 NAT 100.64.0.0/10
-    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(cleanHost)) {
-        return true;
-    }
-    // 广播 255.255.255.255
-    if (cleanHost === '255.255.255.255') return true;
     return false;
 }
 

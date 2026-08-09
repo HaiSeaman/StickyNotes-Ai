@@ -548,7 +548,6 @@ function toggleFavFilter(): void {
 // ============ 单曲删除 ============
 function deleteTrack(index: number): void {
     if (index < 0 || index >= playlist.length) return;
-    let skipRender = false;
     const wasCurrent = currentIndex === index;
     const wasBeforeCurrent = index < currentIndex;
     // 删除前如果正在播放该曲，先卸载 Howl 并取消定时器，避免切换期间残留
@@ -565,7 +564,11 @@ function deleteTrack(index: number): void {
         // 删除的就是当前曲：若后面还有曲（已前移到 index），直接播它；否则停止
         if (index < playlist.length) {
             playTrack(index);
-            skipRender = true;  // playTrack 内部已调用 renderPlaylist，跳过末尾重复渲染
+            // 修复：playTrack 内部只调用 updateNowPlaying/updatePlayingHighlight，
+            // 从不重建列表 DOM。此处必须显式 renderPlaylist()，
+            // 否则列表仍保留被删曲目的行、后续 data-index 全部错位，
+            // 收藏/删除会命中错误曲目。不再跳过渲染。
+            renderPlaylist();
         } else {
             currentIndex = -1;
             isPlaying = false;
@@ -577,7 +580,7 @@ function deleteTrack(index: number): void {
         currentIndex--;
     }
     savePlaylistDebounced();
-    if (!skipRender) renderPlaylist();
+    renderPlaylist();
 }
 
 // ============ 控制条收藏按钮控制与同步 ============

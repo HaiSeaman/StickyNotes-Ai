@@ -107,7 +107,8 @@ export function appendLog(level: string, args: any[], source?: string): void {
         if (logFileReady) {
             logPendingFlush.push(line);
             if (logPendingFlush.length > 1000) {
-                logPendingFlush.shift();
+                // M14 修复：使用 slice 替代 shift()，避免 O(n) 操作
+                logPendingFlush = logPendingFlush.slice(-500);
             }
             if (logPendingFlush.length >= LOG_FILE_FLUSH_THRESHOLD) {
                 flushLogFile();

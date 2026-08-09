@@ -90,11 +90,11 @@ export interface IpcChannelMap {
   'ai:load-config': () => AiConfig;
   'ai:fetch-models': (baseUrl: string, apiKey: string) => string[];
   'ai:generate': (userContent: string) => string;
-  'ai:chat': (payload: { messages: unknown[]; stream?: boolean }) => unknown;
+  'ai:chat': (payload: { messages: unknown[]; stream?: boolean; thinking?: boolean }) => { content: string; reasoning: string; model: string; usage: { input: number; output: number; total: number }; elapsedMs: number; aborted: boolean };
   'chat:abort': () => void;
   'chat:save-image': (dataUrl: string) => string;
   'chat:delete-image': (fileName: string) => boolean;
-  'chat:delete-images-batch': (paths: string[]) => { success: boolean; deletedCount?: number; error?: string };
+  'chat:delete-images-batch': (paths: string[]) => { success: boolean; deletedCount: number; errors: string[] };
   'ai:save-custom-size': (size: string) => boolean;
   'ai:load-custom-size': () => string;
   'ai:save-image-config': (config: ImageConfig) => boolean;

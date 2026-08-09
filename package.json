@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
     "start": "npm run build:ts && electron .",
     "test": "echo 测试文件已清理，暂无测试可跑",
-    "pack": "npm run build:ts && npx @electron/packager . --platform=win32 --arch=x64 --out=dist-app --overwrite --icon=build/icon.ico --asar --prune --ignore=\"^src(/|$)\" --ignore=\"^dist-app(/|$)\" --ignore=\"^public(/|$)\" --ignore=\"^styles(/|$)\" --ignore=\"^index.html$\" --ignore=node_modules/.cache --ignore=\"[vV][0-9].*\\.md\" --ignore=.git --ignore=.gitignore --ignore=\"(^|/)docs(/|$)\" --ignore=\"tsconfig.*\\.json$\" --ignore=\"tsup\\.config\\.ts$\" --ignore=\"vite\\.config\\.(ts|mts)$\""
+    "pack": "npm run build:ts && npx @electron/packager . --platform=win32 --arch=x64 --out=dist-app --overwrite --icon=build/icon.ico --asar --prune --ignore=\"^/src(/|$)\" --ignore=\"^/dist-app(/|$)\" --ignore=\"^/public(/|$)\" --ignore=\"^/styles(/|$)\" --ignore=\"^/index\\.html$\" --ignore=\"^/\\.reasonix(/|$)\" --ignore=\"^/constants(/|$)\" --ignore=\"^/\\.git(/|$)\" --ignore=\"^/\\.gitattributes$\" --ignore=\"^/\\.pack[^/]*$\" --ignore=node_modules/.cache --ignore=\"[vV][0-9].*\\.md\" --ignore=\"(^|/)docs(/|$)\" --ignore=\"tsconfig.*\\.json$\" --ignore=\"tsup\\.config\\.ts$\" --ignore=\"vite\\.config\\.(ts|mts)$\""
   },
   "keywords": [
     "sticky-note",

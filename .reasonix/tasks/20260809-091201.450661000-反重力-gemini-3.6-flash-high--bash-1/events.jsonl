@@ -1,0 +1,2 @@
+{"sequence":1,"timestamp":"2026-08-09T17:44:23.6870675+08:00","event_type":"state_change","task_id":"20260809-091201.450661000-反重力-gemini-3.6-flash-high--bash-1","session_id":"20260809-091201.450661000-反重力-gemini-3.6-flash-high","state":"running","runtime_state":"alive"}
+{"sequence":2,"timestamp":"2026-08-09T17:46:58.903943+08:00","event_type":"state_change","task_id":"20260809-091201.450661000-反重力-gemini-3.6-flash-high--bash-1","session_id":"20260809-091201.450661000-反重力-gemini-3.6-flash-high","state":"succeeded","runtime_state":"exited"}

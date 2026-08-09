@@ -71,6 +71,7 @@ export const api = {
 
     saveAIConfig: makeInvoke('ai:save-config'),
     loadAIConfig: makeInvoke('ai:load-config'),
+    testSearch: makeInvoke('ai:test-search'),
     fetchModels: makeInvoke('ai:fetch-models'),
     generateContent: makeInvoke('ai:generate'),
     chat: makeInvoke('ai:chat'),

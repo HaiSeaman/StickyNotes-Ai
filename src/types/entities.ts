@@ -34,8 +34,10 @@ export interface NoteHistorySnapshot {
 export interface TodoItem {
   id: string;
   text: string;
-  completed: boolean;
+  done: boolean;
   createdAt: number;
+  updatedAt?: number;
+  completedAt?: number;
 }
 
 /**
@@ -43,8 +45,8 @@ export interface TodoItem {
  */
 export interface ActivityData {
   [dateStr: string]: {
-    notesCreated?: number;
-    todosCompleted?: number;
+    note?: number;
+    todo?: number;
     aiChatsCount?: number;
     activeMinutes?: number;
   };
@@ -54,17 +56,24 @@ export interface ActivityData {
  * 云同步配置
  */
 export interface SyncConfig {
-  provider: 'webdav' | 'github' | 'gitee' | 'onedrive' | 'custom';
+  provider: 'webdav' | 's3' | 'custom';
   url?: string;
   user?: string;
   pass?: string;
   allowSelfSigned?: boolean;
-  serverUrl?: string;
-  username?: string;
-  password?: string;
-  token?: string;
-  repo?: string;
+  trustedCertFingerprint?: string;
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  accessKey?: string;
+  secretKey?: string;
+  accessKeyEnc?: string;
+  secretKeyEnc?: string;
+  passEnc?: string;
+  path?: string;
   autoSync?: boolean;
+  autoSyncProvider?: string;
+  autoSyncInterval?: number;
   syncIntervalMinutes?: number;
 }
 

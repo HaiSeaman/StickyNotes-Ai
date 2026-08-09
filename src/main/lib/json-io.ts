@@ -79,15 +79,36 @@ export async function saveJSON(filePath: string, data: any): Promise<boolean> {
     task.isWriting = true;
     task.currentPromise = (async () => {
         let lastResult = false;
-        while (task!.pendingData !== null) {
-            const dataToSave = task!.pendingData;
-            task!.pendingData = null;
-            lastResult = await doSaveJSON(filePath, dataToSave);
-        }
-        task!.isWriting = false;
-        // L4 修复：写入完成且无待写数据时清理 Map 条目，避免 fileLocks 无限增长导致内存泄漏
-        if (task!.pendingData === null && !task!.isWriting) {
-            fileLocks.delete(filePath);
+        let dataToSave: any = null;
+        try {
+            while (task!.pendingData !== null) {
+                dataToSave = task!.pendingData;
+                task!.pendingData = null;
+                lastResult = await doSaveJSON(filePath, dataToSave);
+                // 写失败（doSaveJSON 返回 false，内部已吞掉异常）：
+                // 若期间没有更新的数据排队则把失败数据放回待写队列（等待后续 saveJSON 重试），
+                // 否则保留更新的数据；无论如何停止本轮回写，防止连续失败死循环
+                if (!lastResult && dataToSave !== null) {
+                    if (task!.pendingData === null) {
+                        task!.pendingData = dataToSave;
+                    }
+                    break;
+                }
+            }
+        } catch (err) {
+            // 防御：doSaveJSON 意外抛异常时同样放回待写队列
+            if (task!.pendingData === null && dataToSave !== null) {
+                task!.pendingData = dataToSave;
+            }
+            throw err;
+        } finally {
+            // 无论成功/异常都复位写标志，避免 isWriting 永久为 true 导致该文件后续保存全部挂死；
+            // pendingData 非空（失败保留或写入期间新到达的数据）时保留 map 条目，
+            // 下次 saveJSON 调用会重新启动写循环（不在此处递归，防止连续失败时无限重试）
+            task!.isWriting = false;
+            if (task!.pendingData === null) {
+                fileLocks.delete(filePath);
+            }
         }
         return lastResult;
     })();

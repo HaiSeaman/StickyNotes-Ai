@@ -1,5 +1,5 @@
 /* ==================== IPC 处理器注册（TypeScript 重写） ====================
- * 从根目录 main.js 迁移而来。注册全部 94 个 handle + 6 个 on，共 100 个 IPC handler，
+ * 从根目录 main.js 迁移而来。注册全部 IPC handler（handle + on），
  * 频道名与 src/preload/preload.ts 完全一致。
  * 业务逻辑逐字等价于 main.js，仅做类型化外壳。
  * 复用 main.ts 导出的辅助函数与根目录 JS 工具模块。
@@ -31,6 +31,7 @@ import {
     getHistoryFilePath,
     readNoteHistory,
     writeNoteHistory,
+    noteHistoryCache,
     HISTORY_MAX_PER_NOTE,
     HISTORY_MIN_INTERVAL_MS,
     withDecryptedKey,
@@ -57,6 +58,9 @@ import {
     MUSIC_MIME_MAP,
     MAX_IMAGE_SIZE,
     MAX_CLIPBOARD_TEXT_SIZE,
+    bufferToImageDataUrl,
+    fetchImageAsDataUrl,
+    sniffImageMime,
 } from '../main.js';
 
 // 跨模块共享状态（独立模块，避免 main ↔ ipc 可变状态循环依赖）
@@ -76,6 +80,7 @@ import {
 
 import { loadJSON, loadJSONAsync, saveJSON, saveJSONSync } from '../lib/json-io.js';
 import { trimTrailingSlash } from '../lib/shared-utils.js';
+import { searchManager, executeAgenticChat } from '../services/search/index.js';
 
 import {
     getNotesPath,
@@ -253,6 +258,18 @@ function tryWrap(fn: (...args: any[]) => any): (...args: any[]) => Promise<any> 
     };
 }
 
+/**
+ * 彻底移除正文中的「🔍 已为您搜索 / 🌐 来源引文 / 参考来源」整块冗长内容。
+ * 用于关闭联网搜索（方案一）时，确保模型端自带 Grounding 输出的引文也不会显示。
+ */
+function stripGroundingBlocks(text: string): string {
+    if (!text || typeof text !== 'string') return text;
+    const blockPattern = /(\*{0,2}(?:🔍|🌐)\s*(?:已为您搜索|搜索关键词|来源引文|参考来源)[：:]\*{0,2}[\s\S]*?(?=(?:\n\*{0,2}(?:🔍|🌐)\s*(?:已为您搜索|搜索关键词|来源引文|参考来源)[：:]|\n\n[^\n]|(?:\n(?![\[0-9\s]))|$)))/g;
+    const stripped = text.replace(blockPattern, '');
+    // 清理多余连续空行与首尾空白
+    return stripped.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+\n/g, '\n').trim();
+}
+
 /* ==================== 注册全部 97 个 IPC handler ==================== */
 export function registerIpcHandlers(): void {
 
@@ -317,8 +334,8 @@ export function registerIpcHandlers(): void {
         } catch (e: any) { console.warn('关闭当前小窗口失败:', e.message); }
     });
 
-    // 8. 小窗口置顶切换
-        ipcMain.handle('popout:close-by-id', (_event: any, { noteId, type }: { noteId: string; type?: 'note' | 'todo' }) => {
+    // 8. 按 ID 关闭小窗口
+    ipcMain.handle('popout:close-by-id', (_event: any, { noteId, type }: { noteId: string; type?: 'note' | 'todo' }) => {
         try {
             return closePopoutById(noteId, type);
         } catch (e) {
@@ -383,11 +400,34 @@ export function registerIpcHandlers(): void {
         };
     });
     ipcMain.handle('settings:save', (_event: any, settings: any) => {
+        if (!settings || typeof settings !== 'object') return false;
         const s = loadSettings();
-        s.bgColor = settings.bgColor || null;
-        if (settings.detailFontSize !== undefined) s.detailFontSize = settings.detailFontSize;
-        if (settings.alarmVolume !== undefined) s.alarmVolume = settings.alarmVolume;
-        if (settings.launchAtLogin !== undefined) s.launchAtLogin = !!settings.launchAtLogin;
+        const ALLOWED_FIELDS = ['bgColor', 'detailFontSize', 'alarmVolume', 'launchAtLogin'];
+        for (const key of ALLOWED_FIELDS) {
+            if (key in settings) {
+                if (key === 'launchAtLogin') {
+                    s[key] = !!settings[key];
+                } else if (key === 'detailFontSize') {
+                    const num = Number(settings[key]);
+                    if (!isNaN(num) && num >= 10 && num <= 36) s[key] = num;
+                } else if (key === 'alarmVolume') {
+                    // 修复：范围与 UI slider（index.html max=300）及渲染端 clamp（0-300）对齐，
+                    // 否则用户将音量调到 100-300 后保存会被静默丢弃
+                    const num = Number(settings[key]);
+                    if (!isNaN(num) && num >= 0 && num <= 300) s[key] = num;
+                } else if (key === 'bgColor') {
+                    // H3 修复：校验 bgColor 格式（只允许 hex 颜色或 null）
+                    const val = settings[key];
+                    if (val === null || val === '') {
+                        s[key] = null;
+                    } else if (typeof val === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(val)) {
+                        s[key] = val;
+                    }
+                } else {
+                    s[key] = settings[key] || null;
+                }
+            }
+        }
         return persistSettings();
     });
 
@@ -418,7 +458,8 @@ export function registerIpcHandlers(): void {
                 user: webdavRaw.user || '',
                 pass: maskCred(webdavPass || webdavRaw.pass || ''),
                 path: webdavRaw.path || '',
-                allowSelfSigned: !!webdavRaw.allowSelfSigned
+                allowSelfSigned: !!webdavRaw.allowSelfSigned,
+                trustedCertFingerprint: webdavRaw.trustedCertFingerprint || ''
             },
             autoSync: cfg.autoSync || false,
             autoSyncInterval: cfg.autoSyncInterval || 30,
@@ -449,7 +490,8 @@ export function registerIpcHandlers(): void {
                 user: webdavConfig.user,
                 passEnc: isMaskedCred(webdavConfig.pass) ? oldWebdav.passEnc : await encryptSecret(webdavConfig.pass),
                 path: webdavConfig.path,
-                allowSelfSigned: !!webdavConfig.allowSelfSigned
+                allowSelfSigned: !!webdavConfig.allowSelfSigned,
+                trustedCertFingerprint: (webdavConfig.trustedCertFingerprint || '').trim()
             },
             autoSync: !!data.autoSync,
             autoSyncInterval: data.autoSyncInterval || 30,
@@ -557,12 +599,48 @@ export function registerIpcHandlers(): void {
         for (const entry of entries) {
             if (entry.isDirectory) continue;
             if (entry.entryName === '_backup_meta.json') continue;
-            if (!entry.entryName.endsWith('.json')) continue;
-            const baseName = path.basename(entry.entryName);
+            const entryName = entry.entryName.replace(/\\/g, '/');
+            // 安全：路径穿越防护（zip 内不允许 .. 或绝对路径）
+            if (entryName.startsWith('/') || /^[A-Za-z]:/.test(entryName) || entryName.split('/').some((seg: string) => seg === '..')) {
+                console.warn('跳过可疑路径的备份条目:', entryName);
+                continue;
+            }
+            const baseName = path.basename(entryName);
             if (!baseName) continue;
             // 安全：禁止恢复 settings.json，防止恶意备份覆盖 PIN 哈希/同步凭据/API Key
             if (baseName.toLowerCase() === 'settings.json') continue;
-            // M6 修复：解析 JSON 并校验结构，已知数组文件必须是数组，所有文件必须是对象或数组
+
+            // 子目录恢复：note_history/（便签历史快照，json）与 chat-images/（聊天图片，二进制）。
+            // 按 entryName 重建完整相对路径（支持多层），与备份端递归收集保持一致
+            const segs = entryName.split('/');
+            if (segs.length >= 2) {
+                const subDir = segs[0];
+                const allowedSub = subDir === 'note_history' || subDir === 'chat-images';
+                if (!allowedSub) {
+                    console.warn('跳过非白名单子目录的备份条目:', entryName);
+                    continue;
+                }
+                const relPath = segs.slice(1).join(path.sep);
+                const relBase = path.basename(relPath);
+                if (subDir === 'note_history' && !relBase.endsWith('.json')) continue;
+                if (subDir === 'chat-images' && !/^[a-zA-Z0-9_.\-]+$/.test(relBase)) {
+                    console.warn('跳过聊天图片非法文件名:', entryName);
+                    continue;
+                }
+                const targetPath = path.join(userDataDir, subDir, relPath);
+                // 纵深防御：最终落点必须仍在 userDataDir 内（前面已拦截 .. 段）
+                if (!targetPath.startsWith(userDataDir + path.sep)) {
+                    console.warn('跳过路径越界的备份条目:', entryName);
+                    continue;
+                }
+                try { fs.mkdirSync(path.dirname(targetPath), { recursive: true }); } catch (e: any) { console.warn('创建恢复目录失败:', e.message); continue; }
+                fs.writeFileSync(targetPath, entry.getData());
+                restoredCount++;
+                continue;
+            }
+
+            // 顶层 JSON：结构校验后写回
+            if (!entryName.endsWith('.json')) continue;
             const entryData = entry.getData();
             let parsed: any;
             try {
@@ -584,8 +662,9 @@ export function registerIpcHandlers(): void {
             restoredCount++;
         }
 
-        // 3. 失效设置缓存
+        // 3. 失效设置缓存与历史快照缓存
         invalidateSettingsCache();
+        noteHistoryCache.clear();
 
         // 4. 通知渲染进程重载数据
         const mw = getMainWindow();
@@ -832,7 +911,19 @@ export function registerIpcHandlers(): void {
         try {
             if (!dataUrl || typeof dataUrl !== 'string') return false;
             if (dataUrl.length > MAX_IMAGE_SIZE * 1.4) return false;
-            const img = nativeImage.createFromDataURL(dataUrl);
+            const base64 = dataUrl.replace(/^data:image\/[\w.+-]+;base64,/, '');
+            if (!base64) return false;
+            let img = nativeImage.createEmpty();
+            try {
+                // 优先按二进制内容自动嗅探格式解码（PNG/JPEG/WebP 等）。
+                // 修复：dataURL 中 MIME 声明与实际数据不符（例如百炼/部分模型返回的
+                // JPEG 图片被硬编码为 data:image/png）时，createFromDataURL 会返回
+                // 空图像导致复制失败，而 createFromBuffer 能正确识别。
+                img = nativeImage.createFromBuffer(Buffer.from(base64, 'base64'));
+            } catch (_) { /* 解码失败，退回 createFromDataURL 再试一次 */ }
+            if (img.isEmpty()) {
+                img = nativeImage.createFromDataURL(dataUrl);
+            }
             if (img.isEmpty()) return false;
             clipboard.writeImage(img);
             return true;
@@ -940,6 +1031,20 @@ export function registerIpcHandlers(): void {
         s.aiConfig.model = config.model || '';
         s.aiConfig.temperature = config.temperature ?? 1;
         s.aiConfig.prompt = config.prompt || '';
+        
+        // 🌐 联网搜索配置
+        if (config.webSearch !== undefined) {
+            if (!s.aiConfig.webSearch) s.aiConfig.webSearch = {};
+            s.aiConfig.webSearch.enabled = Boolean(config.webSearch.enabled);
+            s.aiConfig.webSearch.provider = config.webSearch.provider || 'builtin';
+            s.aiConfig.webSearch.customUrl = config.webSearch.customUrl || '';
+            s.aiConfig.webSearch.resultCount = Number(config.webSearch.resultCount) || 5;
+            if (config.webSearch.apiKey !== undefined) {
+                s.aiConfig.webSearch.encryptedKey = isMaskedCred(config.webSearch.apiKey)
+                    ? s.aiConfig.webSearch.encryptedKey
+                    : (config.webSearch.apiKey ? await encryptSecret(config.webSearch.apiKey, 'Web Search API Key') : '');
+            }
+        }
         return persistSettings();
     });
 
@@ -951,17 +1056,92 @@ export function registerIpcHandlers(): void {
         try { apiKey = maskCred(await decryptSecret(cfg.encryptedKey, 'API Key')); } catch (e: any) {
             console.error('加载 API Key 失败:', e.message);
         }
+
+        const ws = cfg.webSearch || {};
+        let wsApiKey = '';
+        if (ws.encryptedKey) {
+            try { wsApiKey = maskCred(await decryptSecret(ws.encryptedKey, 'Web Search API Key')); } catch (e: any) {
+                console.warn('加载联网搜索 API Key 失败:', e.message);
+            }
+        }
+
         return {
             baseUrl: cfg.baseUrl || '',
             apiKey: apiKey,
             model: cfg.model || '',
             temperature: cfg.temperature ?? 1,
             prompt: cfg.prompt || '',
+            webSearch: {
+                enabled: Boolean(ws.enabled),
+                provider: ws.provider || 'builtin',
+                apiKey: wsApiKey,
+                customUrl: ws.customUrl || '',
+                resultCount: ws.resultCount || 5,
+            }
         };
     });
 
-    // 62. 获取模型列表
+    // 61.1 测试联网搜索连接
+    ipcMain.handle('ai:test-search', async (_event: any, searchConfig: any) => {
+        try {
+            assertPayloadSize(searchConfig, MAX_IPC_PAYLOAD_SIZE, 'ai:test-search 入参');
+            let apiKey = searchConfig?.apiKey || '';
+            if (isMaskedCred(apiKey)) {
+                const s = loadSettings();
+                const ws = s.aiConfig?.webSearch || {};
+                try {
+                    apiKey = await decryptSecret(ws.encryptedKey, 'Web Search API Key');
+                } catch (e: any) {
+                    throw new Error('无法读取已保存的搜索 API Key，请重新输入。');
+                }
+            }
+
+            const targetConfig = {
+                provider: searchConfig?.provider || 'builtin',
+                apiKey: apiKey,
+                apiUrl: searchConfig?.customUrl || searchConfig?.apiUrl || '',
+                maxResults: Number(searchConfig?.resultCount || searchConfig?.maxResults) || 3,
+                timeoutMs: 10000
+            };
+
+            const result = await searchManager.testConnection(targetConfig);
+            return result;
+        } catch (e: any) {
+            return {
+                ok: false,
+                message: e.message || '测试连接异常失败',
+                latencyMs: 0
+            };
+        }
+    });
+
+    // 62. 获取模型列表（带速率限制：每分钟最多 10 次）
+    const fetchModelsRateLimiter = (() => {
+        const timestamps: number[] = [];
+        const LIMIT = 10;
+        const WINDOW_MS = 60000;
+        return {
+            check(): boolean {
+                const now = Date.now();
+                // H6 修复：使用 filter 替代 shift() 清理过期条目，避免内存泄漏
+                // 虽然 filter 是 O(n)，但 timestamps 最多只有 LIMIT 个元素
+                const validIdx = timestamps.findIndex(t => t >= now - WINDOW_MS);
+                if (validIdx > 0) {
+                    timestamps.splice(0, validIdx);
+                } else if (validIdx === -1) {
+                    timestamps.length = 0;
+                }
+                if (timestamps.length >= LIMIT) return false;
+                timestamps.push(now);
+                return true;
+            }
+        };
+    })();
+
     ipcMain.handle('ai:fetch-models', async (_event: any, baseUrl: string, apiKey: string) => {
+        if (!fetchModelsRateLimiter.check()) {
+            throw new Error('请求过于频繁，请稍后再试（每分钟最多 10 次）');
+        }
         validateAiBaseUrl(baseUrl, 'API 地址');
         const s = loadSettings();
         const savedBaseUrl = s.aiConfig && s.aiConfig.baseUrl;
@@ -1042,25 +1222,29 @@ export function registerIpcHandlers(): void {
         return fileName;
     });
 
-    // 65. 删除聊天图片
-    
-    // 65.5. ??????????
+    // 65. 批量删除聊天图片
     ipcMain.handle('chat:delete-images-batch', async (_event: any, fileNames: string[]) => {
-        if (!Array.isArray(fileNames) || fileNames.length === 0) return { success: true, deletedCount: 0 };
+        if (!Array.isArray(fileNames) || fileNames.length === 0) return { success: true, deletedCount: 0, errors: [] as string[] };
         const dir = getChatImagesDir();
         let count = 0;
+        const errors: string[] = [];
         for (const fileName of fileNames) {
             if (!fileName) continue;
             const filePath = path.normalize(path.join(dir, fileName));
-            if (filePath !== dir && !filePath.startsWith(dir + path.sep)) continue;
+            if (filePath !== dir && !filePath.startsWith(dir + path.sep)) {
+                continue;
+            }
             try {
                 await fs.promises.unlink(filePath);
                 count++;
             } catch (e: any) {
-                // ????????????????
+                if (e.code !== 'ENOENT') {
+                    errors.push(`${fileName}: ${e.message}`);
+                    console.warn('批量删除图片失败:', fileName, e.message);
+                }
             }
         }
-        return { success: true, deletedCount: count };
+        return { success: errors.length === 0, deletedCount: count, errors };
     });
     ipcMain.handle('chat:delete-image', (_event: any, fileName: string) => {
         if (!fileName) return false;
@@ -1079,17 +1263,22 @@ export function registerIpcHandlers(): void {
     // 66. AI 多轮对话（流式输出 + 多模态 + 思考模式）
     ipcMain.handle('ai:chat', async (event: any, payload: any) => {
         assertPayloadSize(payload, MAX_IPC_PAYLOAD_SIZE, 'ai:chat 入参');
+        // P0 修复 C4：原子性检查+赋值，消除 TOCTOU 竞态窗口
+        // 关键改进：整个检查+赋值+配置加载在同一个同步段中完成，中间不插入 await
+        const ac = new AbortController();
+        // 在赋值前检查并立即赋值（同步操作，不可中断）
         if (sharedState.chatAbortController) {
             throw new Error('上一次对话仍在进行中，请点击"中止"按钮后再发送新消息');
         }
-        // M2 修复：在后续 await（decryptSecret）之前同步设置占位 controller，防 TOCTOU 竞态
-        // 两个并发 ai:chat 调用可能都通过 null 检查后各自赋值，后者覆盖前者
-        const ac = new AbortController();
         sharedState.chatAbortController = ac;
-        try {
+        // 立即加载配置（在第一个 await 前完成，确保原子性）
         const s = loadSettings();
         const cfg = s.aiConfig || {};
-        if (!cfg.baseUrl || !cfg.model) throw new Error('AI 配置不完整，请先在 AI 设置中配置');
+        if (!cfg.baseUrl || !cfg.model) {
+            sharedState.chatAbortController = null;
+            throw new Error('AI 配置不完整，请先在 AI 设置中配置');
+        }
+        try {
         validateAiBaseUrl(cfg.baseUrl, 'AI API 地址');
         return await withDecryptedKey(() => decryptSecret(cfg.encryptedKey, 'API Key'), async (apiKey: string) => {
             if (!apiKey) throw new Error('API Key 未配置');
@@ -1097,6 +1286,22 @@ export function registerIpcHandlers(): void {
 
             const input = (payload && Array.isArray(payload.messages)) ? payload : { messages: Array.isArray(payload) ? payload : [] };
             const wantThinking = !!(payload && payload.thinking);
+            const wantWebSearch = !!(payload && payload.webSearch);
+            let lastUserPrompt = '';
+            if (Array.isArray(input.messages)) {
+                for (let i = input.messages.length - 1; i >= 0; i--) {
+                    if (input.messages[i]?.role === 'user') {
+                        const userMsg = input.messages[i];
+                        if (typeof userMsg.content === 'string') {
+                            lastUserPrompt = userMsg.content;
+                        } else if (Array.isArray(userMsg.content)) {
+                            const txtPart = userMsg.content.find((p: any) => p && p.type === 'text');
+                            if (txtPart && txtPart.text) lastUserPrompt = txtPart.text;
+                        }
+                        break;
+                    }
+                }
+            }
 
             const messages: any[] = [];
             if (cfg.prompt) messages.push({ role: 'system', content: cfg.prompt });
@@ -1141,52 +1346,37 @@ export function registerIpcHandlers(): void {
             const timeoutId = setTimeout(() => { try { ac.abort(); } catch (e: any) { console.warn('中止请求失败:', e.message); } }, 180000);
             let aborted = false;
 
-            let fullContent = '';
-            let fullReasoning = '';
-            let modelName = cfg.model;
-            let modelNameUpdated = false;
-            let usage = { input: 0, output: 0, total: 0 };
             const sender = event.sender;
-
+            let chatResult: any = null;
             try {
-                const resp = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + apiKey,
-                        'Accept': 'text/event-stream'
-                    },
-                    body: JSON.stringify(reqBody),
-                    signal: ac.signal,
-                });
-
-                if (!resp.ok) {
-                    throw new Error(await extractHttpError(resp));
+                const searchRaw = s.aiConfig?.webSearch || {};
+            let searchApiKey = searchRaw.apiKey || '';
+            if (searchRaw.encryptedKey) {
+                try {
+                    searchApiKey = await decryptSecret(searchRaw.encryptedKey, 'Web Search API Key');
+                } catch (e: any) {
+                    console.warn('[ai:chat] 解密搜索 API Key 失败，降级为空:', e.message);
                 }
-
-                await parseSSEStream(resp, (chunk: any) => {
-                    if (chunk.model && !modelNameUpdated) {
-                        modelName = chunk.model;
-                        modelNameUpdated = true;
-                    }
-                    if (chunk.usage) {
-                        usage = {
-                            input: chunk.usage.prompt_tokens || chunk.usage.input_tokens || 0,
-                            output: chunk.usage.completion_tokens || chunk.usage.output_tokens || 0,
-                            total: chunk.usage.total_tokens || 0
-                        };
-                    }
-                    const choice = chunk.choices && chunk.choices[0];
-                    if (!choice) return;
-                    const delta = choice.delta || {};
-                    if (delta.content) {
-                        fullContent += delta.content;
-                        sender.send('chat:chunk', { type: 'content', text: delta.content });
-                    }
-                    const reasoningDelta = delta.reasoning_content || delta.thinking || delta.reasoning || '';
-                    if (reasoningDelta) {
-                        fullReasoning += reasoningDelta;
-                        sender.send('chat:chunk', { type: 'reasoning', text: reasoningDelta });
+            }
+            const searchConfig = {
+                provider: searchRaw.provider || 'builtin',
+                apiKey: searchApiKey,
+                apiUrl: searchRaw.customUrl || '',
+                maxResults: Number(searchRaw.resultCount) || 5,
+                timeoutMs: 8000
+            };
+                chatResult = await executeAgenticChat(messages, {
+                    baseUrl: cfg.baseUrl,
+                    apiKey: apiKey,
+                    model: cfg.model,
+                    temperature: cfg.temperature ?? 1,
+                    prompt: cfg.prompt,
+                    enableThinking: wantThinking,
+                    webSearchEnabled: wantWebSearch,
+                    webSearchConfig: searchConfig,
+                    signal: ac.signal,
+                    onChunk: (evt) => {
+                        sender.send('chat:chunk', evt);
                     }
                 });
             } catch (err: any) {
@@ -1203,13 +1393,16 @@ export function registerIpcHandlers(): void {
             }
 
             const elapsedMs = Date.now() - startTs;
+            // 方案一：关闭联网搜索时，彻底移除模型自带 Grounding 输出的搜索/引文冗长块
+            const finalContent = chatResult ? chatResult.content : '';
             return {
-                content: fullContent,
-                reasoning: fullReasoning,
-                model: modelName,
-                usage: usage,
+                content: wantWebSearch ? finalContent : stripGroundingBlocks(finalContent),
+                reasoning: chatResult ? chatResult.reasoning : '',
+                model: chatResult ? chatResult.model : cfg.model,
+                sources: chatResult ? chatResult.sources : [],
+                usage: chatResult ? chatResult.usage : { input: 0, output: 0, total: 0 },
                 elapsedMs: elapsedMs,
-                aborted: aborted
+                aborted: aborted || (chatResult ? chatResult.aborted : false)
             };
         });
         } catch (err) {
@@ -1420,10 +1613,14 @@ export function registerIpcHandlers(): void {
             if (params.imageData) {
                 // 图生图: /images/edits (multipart)
                 url = buildOpenAiImageUrl(baseUrl, '/images/edits');
-                const base64Data = params.imageData.replace(/^data:image\/\w+;base64,/, '');
+                const base64Data = params.imageData.replace(/^data:image\/[\w.+-]+;base64,/, '');
                 const imageBuffer = Buffer.from(base64Data, 'base64');
+                // 修复：按魔数嗅探真实格式决定 multipart 的 MIME 与文件名，
+                // 避免用户上传 JPEG/WebP 时被硬编码为 image/png 导致部分服务端格式校验失败
+                const sniffedMime = sniffImageMime(imageBuffer, 'image/png');
+                const mimeExt = sniffedMime === 'image/jpeg' ? 'jpg' : sniffedMime === 'image/webp' ? 'webp' : sniffedMime === 'image/gif' ? 'gif' : 'png';
                 const form = new FormData();
-                form.append('image', new Blob([imageBuffer], { type: 'image/png' }), 'image.png');
+                form.append('image', new Blob([imageBuffer], { type: sniffedMime }), 'image.' + mimeExt);
                 form.append('prompt', prompt);
                 form.append('model', model);
                 form.append('n', '1');
@@ -1459,7 +1656,8 @@ export function registerIpcHandlers(): void {
             const item = data && data.data && data.data[0];
             if (!item) throw new Error('API 未返回图片数据');
             if (item.b64_json) {
-                const dataUrl = 'data:image/png;base64,' + item.b64_json;
+                // 修复：按魔数嗅探真实格式构造 dataURL（部分模型返回的 b64 数据可能不是 PNG）
+                const dataUrl = bufferToImageDataUrl(Buffer.from(item.b64_json, 'base64'));
                 saveImageToDisk(dataUrl, cfg);
                 return dataUrl;
             }
@@ -1467,15 +1665,8 @@ export function registerIpcHandlers(): void {
                 if (!(await isSafeExternalUrlAsync(item.url))) {
                     throw new Error('AI 服务返回的图片地址不安全（需 https 外网地址），已拒绝下载');
                 }
-                // 下载图片 URL 转为 dataURL
-                const imgResp = await fetch(item.url, { signal: AbortSignal.timeout(30000) });
-                if (!imgResp.ok) {
-                    throw new Error('图片下载失败 HTTP ' + imgResp.status + ': ' + imgResp.statusText);
-                }
-                const imgBuf = await imgResp.arrayBuffer();
-                const dataUrl = 'data:image/png;base64,' + Buffer.from(imgBuf).toString('base64');
-                saveImageToDisk(dataUrl, cfg);
-                return dataUrl;
+                // 下载图片 URL 转为 dataURL（复用 fetchImageAsDataUrl：Content-Type + 魔数嗅探正确 MIME）
+                return await fetchImageAsDataUrl(item.url, cfg);
             }
             throw new Error('API 未返回图片数据');
         });
