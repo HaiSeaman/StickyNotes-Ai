@@ -96,6 +96,8 @@ import {
     getChatImagesDir,
     getMusicDir,
     getMusicPlaylistPath,
+    getMusicFavoritesPath,
+    getMusicFoldersPath,
     getMusicCoversDir,
     getRadioDir,
     getRadioCachePath,
@@ -1906,6 +1908,55 @@ export function registerIpcHandlers(): void {
             }
         }
         await saveJSON(getMusicPlaylistPath(), playlist);
+        return { success: true };
+    }));
+
+    // 80a. 加载音乐收藏列表
+    ipcMain.handle('music:load-favorites', tryWrap(async () => {
+        const data = await loadJSONAsync<Record<string, any>>(getMusicFavoritesPath(), {});
+        const favorites = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+        for (const item of Object.values(favorites)) {
+            if (item && typeof (item as any).filePath === 'string' && path.isAbsolute((item as any).filePath)) {
+                await approveAudioPath((item as any).filePath);
+            }
+        }
+        return { success: true, favorites };
+    }));
+
+    // 80b. 保存音乐收藏列表
+    ipcMain.handle('music:save-favorites', tryWrap(async (_event: any, favorites: any) => {
+        assertPayloadSize(favorites, MAX_IPC_PAYLOAD_SIZE, 'music:save-favorites');
+        if (!favorites || typeof favorites !== 'object' || Array.isArray(favorites)) throw new Error('收藏列表格式无效');
+        await fs.promises.mkdir(getMusicDir(), { recursive: true });
+        for (const item of Object.values(favorites)) {
+            if (item && typeof (item as any).filePath === 'string' && path.isAbsolute((item as any).filePath)) {
+                await approveAudioPath((item as any).filePath);
+            }
+        }
+        await saveJSON(getMusicFavoritesPath(), favorites);
+        return { success: true };
+    }));
+
+    // 80c. 加载保存的音频文件夹列表
+    ipcMain.handle('music:load-folders', tryWrap(async () => {
+        const data = await loadJSONAsync<string[]>(getMusicFoldersPath(), []);
+        const folders = Array.isArray(data) ? data.filter(f => typeof f === 'string' && f.trim()) : [];
+        for (const folder of folders) {
+            await approveScanFolder(folder);
+        }
+        return { success: true, folders };
+    }));
+
+    // 80d. 保存音频文件夹列表
+    ipcMain.handle('music:save-folders', tryWrap(async (_event: any, folders: string[]) => {
+        assertPayloadSize(folders, MAX_IPC_PAYLOAD_SIZE, 'music:save-folders');
+        if (!Array.isArray(folders)) throw new Error('文件夹列表格式无效');
+        await fs.promises.mkdir(getMusicDir(), { recursive: true });
+        const validFolders = folders.filter(f => typeof f === 'string' && f.trim());
+        for (const folder of validFolders) {
+            await approveScanFolder(folder);
+        }
+        await saveJSON(getMusicFoldersPath(), validFolders);
         return { success: true };
     }));
 

@@ -61,6 +61,14 @@ export function getMusicDir(): string {
 export function getMusicPlaylistPath(): string {
     return path.join(app.getPath('userData'), 'music', 'playlist.json');
 }
+// 音乐收藏库持久化文件
+export function getMusicFavoritesPath(): string {
+    return path.join(app.getPath('userData'), 'music', 'favorites.json');
+}
+// 音乐文件夹列表持久化文件
+export function getMusicFoldersPath(): string {
+    return path.join(app.getPath('userData'), 'music', 'folders.json');
+}
 // 音乐专辑封面缓存目录
 export function getMusicCoversDir(): string {
     return path.join(app.getPath('userData'), 'music', 'covers');

@@ -139,6 +139,10 @@ export const api = {
     musicReadMetadata: (filePath: string) => ipcRenderer.invoke('music:read-metadata', { filePath }),
     musicLoadPlaylist: makeInvoke('music:load-playlist'),
     musicSavePlaylist: (playlist: any) => ipcRenderer.invoke('music:save-playlist', playlist),
+    musicLoadFavorites: makeInvoke('music:load-favorites'),
+    musicSaveFavorites: (favorites: any) => ipcRenderer.invoke('music:save-favorites', favorites),
+    musicLoadFolders: makeInvoke('music:load-folders'),
+    musicSaveFolders: (folders: any) => ipcRenderer.invoke('music:save-folders', folders),
 
     radioLoadConfig: makeInvoke('radio:load-config'),
     radioSaveConfig: (config: any) => ipcRenderer.invoke('radio:save-config', config),

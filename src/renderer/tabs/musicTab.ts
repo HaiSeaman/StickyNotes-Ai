@@ -11,6 +11,8 @@ import { Howl } from 'howler';
 
 // ============ 状态 ============
 let playlist: any[] = [];           // [{filePath,title,artist,album,duration,coverPath,size,addedAt}]
+let favoritesMap: Record<string, any> = {}; // { [filePath]: { filePath, title, artist, album, coverPath, duration } }
+let savedFolders: string[] = [];     // 已添加的文件夹路径列表
 let currentIndex: number = -1;       // 当前播放索引（-1 表示无）
 let isPlaying: boolean = false;
 let playMode: 'sequential' | 'shuffle' | 'single' = 'sequential';
@@ -53,6 +55,18 @@ const savePlaylistDebounced = debounce(() => {
         window.api.musicSavePlaylist(playlist).catch((e: any) => console.warn('[Music] 保存播放列表失败:', e));
     }
 }, 1500);
+// 收藏持久化防抖（1.5s）
+const saveFavoritesDebounced = debounce(() => {
+    if (window.api && window.api.musicSaveFavorites) {
+        window.api.musicSaveFavorites(favoritesMap).catch((e: any) => console.warn('[Music] 保存收藏夹失败:', e));
+    }
+}, 1500);
+// 文件夹列表持久化防抖（1.5s）
+const saveFoldersDebounced = debounce(() => {
+    if (window.api && window.api.musicSaveFolders) {
+        window.api.musicSaveFolders(savedFolders).catch((e: any) => console.warn('[Music] 保存文件夹列表失败:', e));
+    }
+}, 1500);
 // 搜索防抖（200ms，沿用项目约定）
 const onSearchInputDebounced = debounce((q: any) => {
     searchQuery = q.trim().toLowerCase();
@@ -91,6 +105,7 @@ async function init(): Promise<void> {
         // 工具栏
         addFilesBtn: document.getElementById('musicAddFilesBtn'),
         addFolderBtn: document.getElementById('musicAddFolderBtn'),
+        refreshFoldersBtn: document.getElementById('musicRefreshFoldersBtn'),
         clearBtn: document.getElementById('musicClearBtn'),
         searchInput: document.getElementById('musicSearchInput'),
         // 播放列表
@@ -122,15 +137,31 @@ async function init(): Promise<void> {
         volIconMute: document.querySelector('#musicVolIconBtn .icon-vol-mute'),
     };
 
-    // 加载持久化播放列表
+    // 加载持久化播放列表、收藏夹与已添加文件夹
     try {
-        const result = await window.api.musicLoadPlaylist();
-        if (result.success && Array.isArray(result.playlist)) {
-            playlist = result.playlist;
+        const [plRes, favRes, foldRes] = await Promise.all([
+            window.api.musicLoadPlaylist(),
+            window.api.musicLoadFavorites(),
+            window.api.musicLoadFolders()
+        ]);
+        if (favRes && favRes.success && favRes.favorites) {
+            favoritesMap = favRes.favorites;
+        }
+        if (foldRes && foldRes.success && Array.isArray(foldRes.folders)) {
+            savedFolders = foldRes.folders;
+        }
+        if (plRes && plRes.success && Array.isArray(plRes.playlist)) {
+            playlist = plRes.playlist;
+            // 确保播放列表中曲目的 favorite 状态与 favoritesMap 保持同步
+            for (const t of playlist) {
+                if (t.filePath && favoritesMap[t.filePath]) {
+                    t.favorite = true;
+                }
+            }
         }
     } catch (e) {
-        console.warn('[Music] 加载播放列表失败:', e);
-        reportLog('warn', ['[Music] 加载播放列表失败:', e]);
+        console.warn('[Music] 加载数据失败:', e);
+        reportLog('warn', ['[Music] 加载数据失败:', e]);
     }
 
     bindEvents();
@@ -161,6 +192,9 @@ function bindEvents(): void {
     }
     if (els.addFolderBtn) {
         els.addFolderBtn.addEventListener('click', addFolder);
+    }
+    if (els.refreshFoldersBtn) {
+        els.refreshFoldersBtn.addEventListener('click', () => rescanSavedFolders(false));
     }
     if (els.clearBtn) {
         els.clearBtn.addEventListener('click', clearPlaylist);
@@ -252,7 +286,8 @@ async function addFiles(): Promise<void> {
                 duration: meta.duration,
                 coverPath: meta.coverPath,
                 size: f.size,
-                addedAt: Date.now()
+                addedAt: Date.now(),
+                favorite: !!favoritesMap[f.filePath]
             });
         }
         playlist = playlist.concat(newTracks);
@@ -268,6 +303,10 @@ async function addFolder(): Promise<void> {
     try {
         const pick = await window.api.musicPickFolder();
         if (!pick.success || !pick.folderPath) return;
+        if (!savedFolders.includes(pick.folderPath)) {
+            savedFolders.push(pick.folderPath);
+            saveFoldersDebounced();
+        }
         const scan = await window.api.musicScanFolder(pick.folderPath, true);
         if (!scan.success || !scan.files.length) return;
         const newTracks: any[] = [];
@@ -282,7 +321,8 @@ async function addFolder(): Promise<void> {
                 duration: meta.duration,
                 coverPath: meta.coverPath,
                 size: f.size,
-                addedAt: Date.now()
+                addedAt: Date.now(),
+                favorite: !!favoritesMap[f.filePath]
             });
         }
         playlist = playlist.concat(newTracks);
@@ -294,6 +334,49 @@ async function addFolder(): Promise<void> {
     } catch (e) {
         console.error('[Music] 添加文件夹失败:', e);
         reportLog('error', ['[Music] 添加文件夹失败:', e]);
+    }
+}
+
+async function rescanSavedFolders(quiet: boolean = false): Promise<void> {
+    if (!savedFolders || savedFolders.length === 0) {
+        if (!quiet) alert('未包含任何已添加的文件夹');
+        return;
+    }
+    let addedCount = 0;
+    for (const folderPath of savedFolders) {
+        try {
+            const scan = await window.api.musicScanFolder(folderPath, true);
+            if (!scan || !scan.success || !scan.files || !scan.files.length) continue;
+            const newTracks: any[] = [];
+            for (const f of scan.files) {
+                if (playlist.some(t => t.filePath === f.filePath)) continue;
+                const meta = await fetchMetadata(f.filePath);
+                newTracks.push({
+                    filePath: f.filePath,
+                    title: meta.title,
+                    artist: meta.artist,
+                    album: meta.album,
+                    duration: meta.duration,
+                    coverPath: meta.coverPath,
+                    size: f.size,
+                    addedAt: Date.now(),
+                    favorite: !!favoritesMap[f.filePath]
+                });
+            }
+            if (newTracks.length > 0) {
+                addedCount += newTracks.length;
+                playlist = playlist.concat(newTracks);
+            }
+        } catch (e) {
+            console.warn('[Music] 扫描文件夹失败:', folderPath, e);
+        }
+    }
+    if (addedCount > 0) {
+        renderPlaylist();
+        savePlaylistDebounced();
+    }
+    if (!quiet) {
+        alert(addedCount > 0 ? `刷新完成，新增 ${addedCount} 首曲目` : '已经是最新状态，未发现新曲目');
     }
 }
 
@@ -620,7 +703,22 @@ function toggleFavorite(index: number): void {
     if (index < 0 || index >= playlist.length) return;
     const track = playlist[index];
     track.favorite = !track.favorite;
+    
+    if (track.favorite) {
+        favoritesMap[track.filePath] = {
+            filePath: track.filePath,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            coverPath: track.coverPath,
+            duration: track.duration
+        };
+    } else {
+        delete favoritesMap[track.filePath];
+    }
+    
     savePlaylistDebounced();
+    saveFavoritesDebounced();
     // 若修改的是当前播放的曲目，同步更新控制条收藏按钮
     if (index === currentIndex) {
         updateNowPlayingFavButton(track);
@@ -787,7 +885,12 @@ function renderPlaylist(): void {
         const item = document.createElement('div');
         item.className = 'music-item' + (i === currentIndex ? ' playing' : '');
         item.dataset.index = String(i);
-        item.draggable = true;  // 启用拖拽排序
+        // 过滤状态（搜索中或仅显示收藏）下禁用拖拽排序，防止局部列表排序乱序全局播放列表
+        if (searchQuery || showFavoritesOnly) {
+            item.draggable = false;
+        } else {
+            item.draggable = true;
+        }  // 启用拖拽排序
 
         const cover = document.createElement('img');
         cover.className = 'music-item-cover';
@@ -923,6 +1026,10 @@ export function initMusicTab(): void {
     if (!inited) {
         inited = true;
         init().catch(e => { console.error('[Music] init 失败:', e); inited = false; });
+    } else {
+        if (savedFolders && savedFolders.length > 0) {
+            rescanSavedFolders(true).catch(e => console.warn('[Music] Tab 激活增量扫描失败:', e));
+        }
     }
 }
 
