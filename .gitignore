@@ -1,9 +1,32 @@
-node_modules
-.reasonrix
-*.log
-*.exe
-.DS_Store
-.idea
+# 依赖包与包管理器文件
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 编译与构建打包产物
 dist/
 dist-renderer/
 dist-app/
+build-tmp/
+*.exe
+*.msi
+*.zip
+*.tar.gz
+*.dmg
+
+# 编辑器与开发环境配置
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 临时系统与日志文件
+.reasonrix/
+*.log
+.DS_Store
+Thumbs.db
