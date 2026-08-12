@@ -25,7 +25,10 @@ let progressTimerId: ReturnType<typeof setInterval> | null = null;  // 进度刷
 let loadErrorCount: number = 0;      // 连续加载失败计数（防止全部损坏时 next 无限循环）
 let isSeeking: boolean = false;       // 用户正在拖动进度条（拖动期间暂停写入进度，避免回跳）
 let inited: boolean = false;          // P6 懒初始化标志：首次进入音乐 tab 时才执行 init()
-let showFavoritesOnly: boolean = false; // 收藏夹过滤开关：true 时仅显示 track.favorite === true 的曲目
+let favoritesActive: boolean = false;           // 收藏夹播放模式开关：true 时显示与播放均限收藏曲目
+let favoriteIndices: number[] = [];             // 收藏索引池：playlist 中所有 favorite === true 的索引
+let pendingReturnToFavorites: boolean = false;  // 待切标志：当前在播非收藏歌，下次切歌落回收藏池
+let tipTimerId: ReturnType<typeof setTimeout> | null = null; // 提示条自动隐藏定时器
 let lastVolumeBeforeMute: number = 80; // 静音前的音量记忆（用于恢复）
 
 // ============ DOM 引用（在 init 中填充）============
@@ -623,6 +626,30 @@ function updateModeButton(): void {
     els.modeBtn.title = label;
     els.modeBtn.setAttribute('aria-label', label);
     els.modeBtn.dataset.mode = playMode;
+}
+
+// ============ 收藏夹播放模式 ============
+function rebuildFavoriteIndices(): void {
+    favoriteIndices = playlist
+        .map((t, i) => ({ t, i }))
+        .filter(x => x.t.favorite === true)
+        .map(x => x.i);
+}
+
+function getPlayablePool(): number[] {
+    // 收藏模式且池非空 → 收藏索引池；否则完整索引（调用方只读，勿修改返回值）
+    return favoritesActive && favoriteIndices.length > 0
+        ? favoriteIndices
+        : playlist.map((_, i) => i);
+}
+
+function showTip(msg: string): void {
+    const tip = els.tip;
+    if (!tip) return;
+    tip.textContent = msg;
+    tip.style.display = 'block';
+    if (tipTimerId) clearTimeout(tipTimerId);
+    tipTimerId = setTimeout(() => { tip.style.display = 'none'; }, 2500);
 }
 
 // ============ 收藏夹过滤 ============
