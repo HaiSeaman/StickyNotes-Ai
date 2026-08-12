@@ -1,6 +1,6 @@
 // tests/rendererUtils.test.ts
 import { describe, it, expect } from 'vitest';
-import { inferThumbPath } from '../src/renderer/lib/rendererUtils.js';
+import { inferThumbPath, nextIndexInPool, prevIndexInPool } from '../src/renderer/lib/rendererUtils.js';
 
 describe('inferThumbPath', () => {
     it('将 Windows 路径 covers → covers/thumb 并统一 .jpg', () => {
@@ -15,5 +15,49 @@ describe('inferThumbPath', () => {
         expect(inferThumbPath('C:\\Users\\xi\\music\\a.jpg')).toBeNull();
         expect(inferThumbPath('')).toBeNull();
         expect(inferThumbPath(null as any)).toBeNull();
+    });
+});
+
+describe('nextIndexInPool', () => {
+    it('顺序模式：池内线性前进', () => {
+        expect(nextIndexInPool([2, 5, 7], 5, 'sequential')).toBe(7);
+    });
+    it('顺序模式：池尾回池首', () => {
+        expect(nextIndexInPool([2, 5, 7], 7, 'sequential')).toBe(2);
+    });
+    it('顺序模式：current 不在池内（待切状态）→ 池内第一首', () => {
+        expect(nextIndexInPool([2, 5, 7], 3, 'sequential')).toBe(2);
+    });
+    it('池为空返回 -1', () => {
+        expect(nextIndexInPool([], 0, 'sequential')).toBe(-1);
+    });
+    it('池长 1：返回池内唯一项', () => {
+        expect(nextIndexInPool([4], 4, 'sequential')).toBe(4);
+    });
+    it('随机模式：返回池内且不等于 current', () => {
+        const rng = () => 0.9; // 固定 rng，保证确定性
+        const result = nextIndexInPool([2, 5, 7, 9], 5, 'shuffle', rng);
+        expect([2, 5, 7, 9]).toContain(result);
+        expect(result).not.toBe(5);
+    });
+    it('随机模式：current 不在池内 → 任意池内项', () => {
+        const rng = () => 0.0;
+        const result = nextIndexInPool([2, 5, 7], 3, 'shuffle', rng);
+        expect([2, 5, 7]).toContain(result);
+    });
+});
+
+describe('prevIndexInPool', () => {
+    it('顺序模式：池内回退', () => {
+        expect(prevIndexInPool([2, 5, 7], 5)).toBe(2);
+    });
+    it('顺序模式：池首回池尾', () => {
+        expect(prevIndexInPool([2, 5, 7], 2)).toBe(7);
+    });
+    it('顺序模式：current 不在池内 → 池内第一首', () => {
+        expect(prevIndexInPool([2, 5, 7], 3)).toBe(2);
+    });
+    it('池为空返回 -1', () => {
+        expect(prevIndexInPool([], 0)).toBe(-1);
     });
 });

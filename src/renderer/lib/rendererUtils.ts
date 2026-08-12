@@ -61,3 +61,42 @@ export function inferThumbPath(coverPath: string): string | null {
     const base = coverPath.slice(idx + 8).replace(/\.[^.]+$/, '');
     return head + 'thumb' + sep + base + '.jpg';
 }
+
+/**
+ * 在索引池内选择"下一首"的索引。
+ * - sequential：线性前进，池尾回池首；current 不在池内（待切状态）→ 池内第一首
+ * - shuffle：随机选一个不等于 current 的池内项；current 不在池内 → 随机任意池内项
+ * - 池为空返回 -1（调用方负责停止播放）
+ * - rng 仅用于测试注入确定性随机源
+ */
+export function nextIndexInPool(
+    pool: number[],
+    current: number,
+    mode: 'sequential' | 'shuffle',
+    rng?: () => number
+): number {
+    if (pool.length === 0) return -1;
+    const rand = rng || Math.random;
+    const pos = pool.indexOf(current);
+    if (mode === 'shuffle') {
+        if (pool.length === 1) return pool[0];
+        if (pos === -1) return pool[Math.floor(rand() * pool.length)];
+        let idx = pos;
+        while (idx === pos) idx = Math.floor(rand() * pool.length);
+        return pool[idx];
+    }
+    // sequential
+    if (pos === -1) return pool[0];
+    return pool[(pos + 1) % pool.length];
+}
+
+/**
+ * 在索引池内选择"上一首"的索引。
+ * 线性回退，池首回池尾；current 不在池内 → 池内第一首；池为空返回 -1。
+ */
+export function prevIndexInPool(pool: number[], current: number): number {
+    if (pool.length === 0) return -1;
+    const pos = pool.indexOf(current);
+    if (pos === -1) return pool[0];
+    return pool[(pos - 1 + pool.length) % pool.length];
+}
