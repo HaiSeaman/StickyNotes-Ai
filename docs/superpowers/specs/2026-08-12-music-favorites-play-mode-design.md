@@ -62,8 +62,9 @@ let pendingReturnToFavorites: boolean = false; // 待切标志：当前在播非
 
 ### 5.2 按钮行为（`toggleFavFilter` 升级为 `toggleFavoritesMode`）
 
-- 点击激活时：若 `favoriteIndices.length === 0` → 拒绝激活，保持关闭，提示"暂无收藏音乐"。
+- 点击激活时：若 `favoriteIndices.length === 0` → 拒绝激活，保持关闭，显示轻量提示条"暂无收藏音乐，请先收藏一些歌曲"（2.5s 自动消失）。
 - 激活成功：`favoritesActive = true` 并持久化；若当前曲（`playlist[currentIndex]`）非收藏 → 置 `pendingReturnToFavorites = true`（单曲循环模式下同样置位，等手动 next）。
+- **置 pending 的同时**：`shuffleHistory = shuffleHistory.filter(i => favoriteIndices.includes(i))`，过滤掉激活前播放的非收藏曲索引（若过滤后长度 ≤ 1 则置空）。保证随机模式"上一首"回退只落在收藏池内。
 - 取消激活：`favoritesActive = false`、清 `pendingReturnToFavorites`，恢复完整列表显示与完整范围播放；当前歌继续播放不中断。
 - 按钮 `.active` 高亮、`title`/`aria-label` 文案同步更新（激活："取消收藏模式"；未激活："激活收藏夹播放"）。
 
@@ -89,8 +90,10 @@ function getPlayablePool(): number[] {
 - 池为空（运行中全部取消收藏）→ 走现有"停止并复位"逻辑（复用 `loadErrorCount` 全失败的处理方式：停止、复位播放状态、保持收藏模式、列表显示"暂无收藏音乐"）。
 
 `prev()` 改造：
-- 随机模式：优先历史栈回退（历史栈只含播放过的曲目，天然在池内；激活后若当前歌非收藏，回退逻辑保持现状）。
+- 随机模式：优先历史栈回退（置 pending 时已清理栈内非收藏索引，回退天然只落在池内）；栈空或仅含当前 → 池内随机一首。
 - 顺序模式：在池内后退一格，池首回池尾；若 `currentIndex` 不在池内（待切状态）→ 落池内第一首并清 pending。
+
+**不变量**：`pendingReturnToFavorites` 未置位时 `currentIndex` 必在播放池内（激活置 pending 与取消收藏当前曲置 pending 是仅有的两个"当前曲出池"途径，均会置位；取消激活清 pending 时同时恢复完整池）。
 
 `playTrack(index)` 改造：
 - 手动点击列表曲目（收藏模式下列表已过滤，点击项必为收藏歌）：若 pending 置位且该索引在池内 → 清 pending，正常播放。
@@ -102,11 +105,12 @@ function getPlayablePool(): number[] {
 | 场景 | 处理 |
 |------|------|
 | 端到端：end 时收藏池为空 | 停止播放并复位状态，收藏模式保持，列表显示"暂无收藏音乐" |
-| 收藏模式中取消收藏当前曲 | 置 pending，播完再切；该曲同时从显示列表消失 |
+| 收藏模式中取消收藏当前曲 | 置 pending（并清理历史栈），播完再切；该曲同时从显示列表消失 |
 | 删除/拖拽/刷新文件夹 | 沿用现有索引修正逻辑，之后全量重建 `favoriteIndices` |
 | 搜索 | 在收藏池内过滤（`renderPlaylist()` 中与 `trackMatchesSearch` 用 `&&` 组合，天然成立） |
 | 收藏模式中全部取消收藏 | 池空，当前歌（非收藏）继续播完；end 时按"end 时池空"处理 |
 | 激活时单曲循环且当前歌非收藏 | 保持循环不自动切，pending 挂起，手动 next 落池 |
+| 空收藏夹点击激活 | 拒绝激活，显示轻量提示条（见 5.7） |
 
 ### 5.5 渲染
 
@@ -117,6 +121,14 @@ function getPlayablePool(): number[] {
 
 - `favoritesActive` → `localStorage['music_favorites_active']`，`init()` 时恢复，按钮初始态同步。
 - `favoriteIndices`、`pendingReturnToFavorites` 不持久化（可由播放列表 + 收藏映射重建）。
+
+### 5.7 轻量提示条（零依赖）
+
+- 项目无现成 toast/Notification 机制（主进程、preload 均无通知能力），为最小改动新增一个内联提示条：
+  - DOM：`#musicTip` 元素（绝对定位于播放列表区顶部），初始隐藏
+  - 触发：空收藏夹点击激活被拒绝时显示，2.5s 后自动隐藏（`setTimeout` 清除）
+  - 样式：沿用 `styles.css` 中音乐 tab 现有配色变量，新增少量 CSS
+- 提示文案："暂无收藏音乐，请先收藏一些歌曲"
 
 ## 6. 测试
 
@@ -129,4 +141,6 @@ function getPlayablePool(): number[] {
 - `src/renderer/tabs/musicTab.ts`（主要改动）
 - `src/renderer/lib/rendererUtils.ts`（新增纯函数）
 - `tests/rendererUtils.test.ts`（新增用例）
-- 无主进程改动；无 IPC 契约改动；无 UI 布局改动（复用现有按钮）。
+- `index.html`（新增 `#musicTip` 提示条元素）
+- `styles.css`（新增提示条样式）
+- 无主进程改动；无 IPC 契约改动。
