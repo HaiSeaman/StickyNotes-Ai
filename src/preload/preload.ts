@@ -62,6 +62,7 @@ export const api = {
     closeWindow: makeInvoke('window:close'),
     resizeWindow: makeInvoke('window:resize'),
     showWindowForAlarm: makeInvoke('alarm:show-window'),
+    openExternalUrl: (url: string) => ipcRenderer.invoke('shell:open-external', url),
 
     onAppSavingBeforeQuit: makeListener('app-saving-before-quit'),
 
@@ -143,6 +144,7 @@ export const api = {
     musicSaveFavorites: (favorites: any) => ipcRenderer.invoke('music:save-favorites', favorites),
     musicLoadFolders: makeInvoke('music:load-folders'),
     musicSaveFolders: (folders: any) => ipcRenderer.invoke('music:save-folders', folders),
+    musicEnsureThumbs: makeInvoke('music:ensure-thumbs'),
 
     radioLoadConfig: makeInvoke('radio:load-config'),
     radioSaveConfig: (config: any) => ipcRenderer.invoke('radio:save-config', config),

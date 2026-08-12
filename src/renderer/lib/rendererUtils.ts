@@ -42,3 +42,22 @@ export function debounce(fn: (...args: any[]) => void, wait?: number): Debounced
     };
     return debounced;
 }
+
+/**
+ * 从封面原图路径推断缩略图路径（covers/<name>.<ext> → covers/thumb/<name>.jpg）。
+ * 浏览器渲染层无 node path 模块，用字符串处理（兼容 \ 与 / 分隔符）。
+ * 推断失败（路径不含 covers 标记）返回 null，由调用方回退原图。
+ */
+export function inferThumbPath(coverPath: string): string | null {
+    if (!coverPath || typeof coverPath !== 'string') return null;
+    const lower = coverPath.toLowerCase();
+    // 兼容 \ 与 / 两种分隔符的 covers 标记
+    const backIdx = lower.lastIndexOf('\\covers\\');
+    const fwdIdx = lower.lastIndexOf('/covers/');
+    const idx = Math.max(backIdx, fwdIdx);
+    if (idx < 0) return null;
+    const sep = coverPath[idx + 7]; // covers 后的原分隔符（\ 或 /），缩略图目录沿用
+    const head = coverPath.slice(0, idx + 8); // 含 ...covers\
+    const base = coverPath.slice(idx + 8).replace(/\.[^.]+$/, '');
+    return head + 'thumb' + sep + base + '.jpg';
+}

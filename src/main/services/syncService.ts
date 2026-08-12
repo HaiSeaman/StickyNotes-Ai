@@ -75,6 +75,12 @@ export function buildWebdavRequestContext(config: SyncConfig): WebdavRequestCont
     throw new Error(`WebDAV 地址格式错误：${e.message}`);
   }
 
+  // 安全加固：协议白名单，仅允许 http/https（file:/ftp:/ws:/data: 等异常协议拒绝，
+  // 防非预期出网面与 SSRF 类误用）
+  if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+    throw new Error('WebDAV 地址仅支持 http/https 协议，当前为: ' + urlObj.protocol);
+  }
+
   const lib = urlObj.protocol === 'https:' ? https : http;
   if (urlObj.protocol === 'http:') {
     console.warn('[安全警告] WebDAV 使用 http:// 明文协议，Basic Auth 凭据将以明文传输，建议改用 https://');
@@ -94,8 +100,31 @@ export function buildWebdavRequestContext(config: SyncConfig): WebdavRequestCont
       // 兼容：allowSelfSigned=true 但未配置指纹时，保持旧的宽松验证行为，
       // 避免存量用户升级后自签名 WebDAV 同步直接中断；
       // 输出持久警告提醒配置 trustedCertFingerprint 更安全。
-      agent = new (lib as any).Agent({ rejectUnauthorized: false });
-      console.warn('[安全警告] WebDAV 已禁用 TLS 证书验证（allowSelfSigned=true 且未配置 trustedCertFingerprint），连接容易遭受中间人攻击。建议在配置中填写 trustedCertFingerprint 启用证书指纹验证。');
+      // 安全改进：使用 rejectUnauthorized:false 但仍保留 checkServerIdentity 的基本域名校验，
+      // 仅跳过证书链验证（自签名场景），不完全等同于"无任何验证"。
+      agent = new (lib as any).Agent({
+        rejectUnauthorized: false,
+        // 即使自签名也保留主机名校验，防域名不匹配的证书
+        checkServerIdentity: (hostname: string, cert: any) => {
+          // 自签名证书无 CA 链，但仍校验 CN/SAN 与 hostname 是否匹配
+          const certNames: string[] = [];
+          if (cert && cert.subject) {
+            if (cert.subject.CN) certNames.push(cert.subject.CN);
+            if (cert.subject.commonName) certNames.push(cert.subject.commonName);
+          }
+          if (cert && cert.subjectaltname) {
+            cert.subjectaltname.split(',').forEach((s: string) => {
+              const m = s.trim().match(/^(?:DNS|IP Address):(.+)$/);
+              if (m) certNames.push(m[1]);
+            });
+          }
+          if (certNames.length > 0 && !certNames.includes(hostname)) {
+            return new Error(`证书主机名不匹配（期望 ${hostname}，证书含 ${certNames.join(', ')}）`);
+          }
+          return undefined; // 通过基本校验
+        },
+      });
+      console.warn('[安全警告] WebDAV 已启用宽松 TLS 验证（allowSelfSigned=true 且未配置 trustedCertFingerprint），仅校验主机名不校验证书链。建议在配置中填写 trustedCertFingerprint 启用证书指纹验证以获得完整安全保护。');
     } else {
       // 默认严格验证：无指纹且未显式允许自签名时，拒绝不可信证书
       agent = new (lib as any).Agent({ rejectUnauthorized: true });

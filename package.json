@@ -11,8 +11,8 @@
     "build:ts": "npm run build:main && npm run build:renderer && npm run build:vite",
     "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.renderer.json",
     "start": "npm run build:ts && electron .",
-    "test": "echo 测试文件已清理，暂无测试可跑",
-    "pack": "npm run build:ts && npx @electron/packager . --platform=win32 --arch=x64 --out=dist-app --overwrite --icon=build/icon.ico --asar --prune --ignore=\"^/src(/|$)\" --ignore=\"^/dist-app(/|$)\" --ignore=\"^/public(/|$)\" --ignore=\"^/styles(/|$)\" --ignore=\"^/index\\.html$\" --ignore=\"^/\\.reasonix(/|$)\" --ignore=\"^/constants(/|$)\" --ignore=\"^/\\.git(/|$)\" --ignore=\"^/\\.gitattributes$\" --ignore=\"^/\\.pack[^/]*$\" --ignore=node_modules/.cache --ignore=\"[vV][0-9].*\\.md\" --ignore=\"(^|/)docs(/|$)\" --ignore=\"tsconfig.*\\.json$\" --ignore=\"tsup\\.config\\.ts$\" --ignore=\"vite\\.config\\.(ts|mts)$\""
+    "test": "vitest run",
+    "pack": "npm run build:ts && npx @electron/packager . --platform=win32 --arch=x64 --out=dist-app --overwrite --icon=build/icon.ico --asar --prune --ignore=\"^/src(/|$)\" --ignore=\"^/dist-app(/|$)\" --ignore=\"^/public(/|$)\" --ignore=\"^/styles(/|$)\" --ignore=\"^/index\\.html$\" --ignore=\"^/\\.reasonix(/|$)\" --ignore=\"^/constants(/|$)\" --ignore=\"^/\\.git(/|$)\" --ignore=\"^/\\.gitattributes$\" --ignore=\"^/\\.pack[^/]*$\" --ignore=node_modules/.cache --ignore=\"[vV][0-9].*\\.md\" --ignore=\"(^|/)docs(/|$)\" --ignore=\"tsconfig.*\\.json$\" --ignore=\"tsup\\.config\\.ts$\" --ignore=\"vite\\.config\\.(ts|mts)$\" --ignore=\"^/tests(/|$)\" --ignore=\"vitest\\.config\\.ts$\" --ignore=\"code-review-report\\.html$\""
   },
   "keywords": [
     "sticky-note",
@@ -29,7 +29,8 @@
     "electron": "^42.7.1",
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5"
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1088.0",

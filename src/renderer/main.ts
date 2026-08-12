@@ -267,15 +267,16 @@ function renderFolderList(opts: any): void {
     listEl.innerHTML = filtered.map(function(it: any) {
         let title = escapeHtml(titleFn(it));
         let meta = metaFn(it);
-        let infoAttr = infoAction ? ' data-action="' + infoAction + '"' : '';
-        return '<div class="folder-item" data-id="' + it.id + '">' +
+        let infoAttr = infoAction ? ' data-action="' + escapeHtml(infoAction) + '"' : '';
+        // 安全加固：id/action/title 属性值统一转义（items 数据来自磁盘 JSON，防属性注入）
+        return '<div class="folder-item" data-id="' + escapeHtml(String(it.id)) + '">' +
             '<div class="folder-item-info"' + infoAttr + '>' +
             '<div class="folder-item-title">' + title + '</div>' +
             '<div class="folder-item-meta">' + meta + '</div>' +
             '</div>' +
             '<div class="folder-item-actions">' +
-            '<button class="folder-item-btn restore-btn" data-action="' + restoreAction + '" title="' + restoreTitle + '">还原</button>' +
-            '<button class="folder-item-btn delete-btn" data-action="' + deleteAction + '" title="永久删除">删除</button>' +
+            '<button class="folder-item-btn restore-btn" data-action="' + escapeHtml(restoreAction) + '" title="' + escapeHtml(restoreTitle) + '">还原</button>' +
+            '<button class="folder-item-btn delete-btn" data-action="' + escapeHtml(deleteAction) + '" title="永久删除">删除</button>' +
             '</div></div>';
     }).join('');
 }
@@ -362,10 +363,12 @@ function setupRendererLogging(): void {
     }
 
     // 崩溃兜底用同步 IPC（sendSync），保证进程死亡前"遗言"100%送达
+    // 限制批量大小防 UI 长时间阻塞（sendSync 是阻塞调用）
     function flushSync(): void {
         if (pending.length === 0) return;
-        const batch = pending;
-        pending = [];
+        const MAX_SYNC_BATCH = 50;
+        const batch = pending.slice(0, MAX_SYNC_BATCH);
+        pending = pending.slice(MAX_SYNC_BATCH);
         try {
             window.api.reportLogsSync({ source: LOG_SOURCE, entries: batch });
         } catch (_) { /* 同步发送失败时放弃，至少已尝试 */ }
@@ -402,10 +405,10 @@ setupRendererLogging();
 // 其 send 部分也是同步发出，主进程 notes:save 内部用 writeFileSync 同步落盘
 // 退出刷盘公共逻辑：清空保存防抖并同步落盘便签与待办
 function flushSaveData(): void {
-    // 保存防抖（contentDirty 标记有未落盘数据，直接 invoke 同步发出）
-    if (saveTimer && contentDirty) {
-        clearTimeout(saveTimer);
-        saveTimer = null;
+    // 保存防抖（contentDirty 标记有未落盘数据；saveTimer 为 null 不代表无脏数据——
+    // deleteNote/archiveNote/switchNote 等会清 saveTimer 但保留 contentDirty）
+    if (contentDirty) {
+        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
         try { window.api.saveNotes(notes); } catch (e: any) { console.error('退出时保存便签失败:', e.message); }
     }
     // 待办事项刷盘（清空防抖定时器并直接同步 flush 避免退出丢数据）
@@ -441,58 +444,29 @@ if (window.api && window.api.onAppSavingBeforeQuit) {
 }
 
 /* ==================== 数据持久化 ==================== */
-// 串行化保存：保存期间若有新保存请求，标记 pending，待当前保存结束后再来一次，
-// 避免合并 Promise 导致保存期间的数据变更丢失，使用互斥排队保证串行落盘
+// 串行化保存：把新保存链接到当前 in-flight 之后（promise 链），
+// 每个调用方都 await 到包含自身数据的落盘；错误不打断链
 let saveInFlight: Promise<void> | null = null;
-let savePending = false;
 const saveNotesToDisk = async (): Promise<void> => {
-    if (saveInFlight) {
-        savePending = true;  // 标记：当前保存结束后再保存一次
-        return saveInFlight;
-    }
-    const executeSave = async () => {
-        try {
-            await window.api.saveNotes(notes);
-        } finally {
-            if (saveInFlight === currentPromise) {
-                saveInFlight = null;
-            }
-        }
+    const executeSave = async (): Promise<void> => {
+        await window.api.saveNotes(notes);
     };
-    const currentPromise = executeSave();
-    saveInFlight = currentPromise;
-    await currentPromise;
-    if (savePending) {
-        savePending = false;
-        return saveNotesToDisk();
-    }
+    const job = saveInFlight ? saveInFlight.then(executeSave) : executeSave();
+    // saveInFlight 存吞错版本，保证链不断裂；调用方拿到的是含自身数据的那次落盘
+    saveInFlight = job.then(() => {}, () => {});
+    return job;
 };
 // 串行化保存独立待办数据
 let saveTodosInFlight: Promise<void> | null = null;
-let saveTodosPending = false;
 
 const saveTodosToDisk = async (): Promise<void> => {
     if (!window.api || !window.api.saveTodos) return;
-    if (saveTodosInFlight) {
-        saveTodosPending = true;
-        return saveTodosInFlight;
-    }
-    const executeSave = async () => {
-        try {
-            await window.api.saveTodos(todos);
-        } finally {
-            if (saveTodosInFlight === currentPromise) {
-                saveTodosInFlight = null;
-            }
-        }
+    const executeSave = async (): Promise<void> => {
+        await window.api.saveTodos(todos);
     };
-    const currentPromise = executeSave();
-    saveTodosInFlight = currentPromise;
-    await currentPromise;
-    if (saveTodosPending) {
-        saveTodosPending = false;
-        return saveTodosToDisk();
-    }
+    const job = saveTodosInFlight ? saveTodosInFlight.then(executeSave) : executeSave();
+    saveTodosInFlight = job.then(() => {}, () => {});
+    return job;
 };
 
 const saveTodosToDiskDebounced = (): void => {
@@ -2035,17 +2009,8 @@ function createMessageDom(msg: any): HTMLElement {
             im.style.cssText = 'max-width:120px;max-height:120px;border-radius:6px;object-fit:cover;cursor:pointer;border:1px solid var(--border)';
             im.title = '点击放大';
             im.addEventListener('click', () => {
-                const w = window.open('', '_blank');
-                if (!w) return;
-                // 用 DOM API 创建元素而非字符串拼接，避免 src 含特殊字符时被解析为代码（XSS）
-                const imgEl = w.document.createElement('img');
-                imgEl.src = src;
-                imgEl.style.cssText = 'max-width:100%;max-height:100%';
-                w.document.body.style.margin = '0';
-                w.document.body.appendChild(imgEl);
-                // L13 修复：断开 opener 引用，防止新窗口通过 window.opener 访问主窗口（noopener 安全特性等效）
-                // 注意：不能在 window.open() 参数中传 'noopener'，否则返回 null 无法注入 DOM
-                w.opener = null;
+                // 应用内模态弹窗展示放大图片（setWindowOpenHandler 拦截 window.open，改用 overlay）
+                showImageZoomModal(src);
             });
             imgWrap.appendChild(im);
         });
@@ -2234,7 +2199,7 @@ function renderContentWithCitations(container: HTMLElement, rawText: string, sou
                         if (sourceItem.url && window.api?.openExternalUrl) {
                             window.api.openExternalUrl(sourceItem.url);
                         } else if (sourceItem.url) {
-                            window.open(sourceItem.url, '_blank');
+                            window.open(sourceItem.url, '_blank', 'noopener,noreferrer');
                         }
                     });
                     container.appendChild(badge);
@@ -2703,6 +2668,8 @@ async function streamAssistantReply(chat: any): Promise<void> {
     let streamedReasoning = '';
     let streamedSources: any[] = [];
     let firstContentReceived = false;
+    // 流式增量渲染：已追加到 DOM 的字符长度（避免每帧全量重建气泡）
+    let streamedRenderedLen = 0;
 
     // 智能滚动 & rAF 渲染调度控制
     let contentDirty = false;
@@ -2722,8 +2689,21 @@ async function streamAssistantReply(chat: any): Promise<void> {
             reasoningDirty = false;
         }
         if (contentDirty && streamBubble) {
-            // 流式渲染同样走智能渲染：既支持 [1] 角标（有 sources 时），也折叠模型输出的搜索/引文冗长块
-            renderContentWithCitations(streamBubble, streamedContent + '▌', streamedSources);
+            // 流式阶段增量追加文本节点（不做全量重建，避免长回复时 DOM 反复重建卡顿）；
+            // 折叠块与引用角标在 finalizeStreamDom 用完整内容统一渲染
+            const newPart = streamedContent.slice(streamedRenderedLen);
+            if (newPart) {
+                streamBubble.appendChild(document.createTextNode(newPart));
+                streamedRenderedLen = streamedContent.length;
+            }
+            // 光标占位始终保持在末尾
+            let cursor = streamBubble.querySelector('.stream-cursor');
+            if (!cursor) {
+                cursor = document.createElement('span');
+                cursor.className = 'stream-cursor';
+                streamBubble.appendChild(cursor);
+            }
+            cursor.textContent = '▌';
             contentDirty = false;
         }
         if (userNearBottom) {
@@ -5043,6 +5023,45 @@ tabs.forEach((tab: any) => {
     });
 });
 
+
+
+/* ==================== 图片放大模态弹窗 ====================
+ * 替代 window.open（被 setWindowOpenHandler 拦截），使用应用内 overlay 展示放大图片
+ */
+function showImageZoomModal(src: string): void {
+    // 移除已存在的模态（防重复）
+    const existing = document.getElementById('imageZoomOverlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'imageZoomOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:20px';
+
+    const img = document.createElement('img');
+    img.src = src;
+    img.style.cssText = 'max-width:95%;max-height:95%;object-fit:contain;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.4)';
+    overlay.appendChild(img);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'position:absolute;top:16px;right:16px;width:36px;height:36px;border:none;border-radius:50%;background:rgba(255,255,255,0.2);color:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.2s';
+    closeBtn.addEventListener('mouseenter', () => { closeBtn.style.background = 'rgba(255,255,255,0.35)'; });
+    closeBtn.addEventListener('mouseleave', () => { closeBtn.style.background = 'rgba(255,255,255,0.2)'; });
+    overlay.appendChild(closeBtn);
+
+    const dismiss = () => {
+        overlay.remove();
+        // 修复：无论以何种方式关闭（ESC/遮罩/关闭按钮）都移除 keydown 监听，防监听器累积泄漏
+        document.removeEventListener('keydown', escHandler);
+    };
+    const escHandler = function (e: KeyboardEvent) {
+        if (e.key === 'Escape') dismiss();
+    };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target === closeBtn) dismiss(); });
+    document.addEventListener('keydown', escHandler);
+
+    document.body.appendChild(overlay);
+}
 
 
 /* ==================== Markdown 预览切换 ====================

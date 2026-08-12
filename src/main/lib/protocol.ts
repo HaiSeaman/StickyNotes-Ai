@@ -73,6 +73,17 @@ export async function serveLocalFile(
 
     // OPT-2 修复：流式 Response + Range 请求支持，替代 readFile 整文件读入内存
     const fileSize = fileStat.size;
+    // 修复：空文件提前返回 200 + Content-Length: 0，避免 createReadStream({start:0, end:-1}) 抛 ERR_OUT_OF_RANGE
+    if (fileSize === 0) {
+        return new Response(null, {
+            status: 200,
+            headers: {
+                'Content-Type': contentType,
+                'Content-Length': '0',
+                'Accept-Ranges': 'bytes'
+            }
+        });
+    }
     const rangeHeader = request?.headers?.get('range');
     let start = 0, end = fileSize - 1, isPartial = false;
     if (rangeHeader) {

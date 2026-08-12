@@ -13,11 +13,41 @@ interface DownloadOptions {
 // H4 修复：默认最大下载体积 500MB，防止恶意服务器无限流式发送数据撑满磁盘
 const DEFAULT_MAX_BYTES = 500 * 1024 * 1024;
 
+// 安全重定向 fetch：入口与每次 3xx 跳转的 Location 都重新执行 URL 安全校验
+// （防 SSRF：undici fetch 默认 redirect:'follow' 只校验初始 URL，重定向目标可指向内网）
+export async function safeFetch(
+    url: string,
+    options: any = {},
+    validate?: (u: string) => Promise<boolean>,
+    maxRedirects: number = 5
+): Promise<Response> {
+    const isSafe = validate || isSafeExternalUrlAsync;
+    if (!(await isSafe(url))) {
+        throw new Error('下载地址不安全（需 https 外网地址），已拒绝');
+    }
+    let current = url;
+    for (let i = 0; i <= maxRedirects; i++) {
+        const resp = await fetch(current, { ...options, redirect: 'manual' });
+        if (resp.status >= 300 && resp.status < 400) {
+            const loc = resp.headers.get('location');
+            if (!loc) throw new Error('重定向缺少 Location 头');
+            const next = new URL(loc, current).toString();
+            if (!(await isSafe(next))) {
+                throw new Error('重定向目标地址不安全（需 https 外网地址），已拒绝');
+            }
+            current = next;
+            continue;
+        }
+        return resp;
+    }
+    throw new Error('重定向次数过多（超过 ' + maxRedirects + ' 次），已中止');
+}
+
 export async function streamDownloadToFile(videoUrl: string, filePath: string, options?: DownloadOptions): Promise<void> {
     options = options || {};
     const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 
-    // H4 修复：入口校验 URL，防 SSRF（file:///、内网地址等）
+    // H4 修复：入口校验 URL，防 SSRF（file:///、内网地址等）；safeFetch 内部对重定向逐跳再校验
     if (!(await isSafeExternalUrlAsync(videoUrl))) {
         throw new Error('下载地址不安全（需 https 外网地址），已拒绝');
     }
@@ -26,7 +56,7 @@ export async function streamDownloadToFile(videoUrl: string, filePath: string, o
     if (options.timeout && options.timeout > 0) {
         fetchOptions.signal = AbortSignal.timeout(options.timeout);
     }
-    const resp = await fetch(videoUrl, fetchOptions);
+    const resp = await safeFetch(videoUrl, fetchOptions);
     if (!resp.ok) {
         throw new Error('下载失败 HTTP ' + resp.status + ': ' + resp.statusText);
     }

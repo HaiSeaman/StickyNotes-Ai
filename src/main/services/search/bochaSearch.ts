@@ -20,7 +20,7 @@ export class BochaSearchProvider implements ISearchProvider {
   readonly id = 'bocha';
   readonly name = '博查 AI 搜索 (国内极速)';
 
-  async search(query: string, config: WebSearchConfig): Promise<SearchResult[]> {
+  async search(query: string, config: WebSearchConfig, signal?: AbortSignal): Promise<SearchResult[]> {
     if (!config.apiKey) {
       throw new Error('未配置博查 API Key');
     }
@@ -31,6 +31,11 @@ export class BochaSearchProvider implements ISearchProvider {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 支持外部中止信号（用户中断搜索时一并取消请求）
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
 
     try {
       const response = await fetch(endpoint, {
@@ -50,7 +55,9 @@ export class BochaSearchProvider implements ISearchProvider {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        throw new Error(`博查 API 响应错误 (HTTP ${response.status}): ${errorText || response.statusText}`);
+        // 安全加固：截断错误体，防止反向代理回显的 API key/凭据随错误信息进日志与 IPC
+        const errDetail = (errorText || response.statusText).slice(0, 500);
+        throw new Error(`博查 API 响应错误 (HTTP ${response.status}): ${errDetail}`);
       }
 
       const data = await response.json();

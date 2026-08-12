@@ -651,8 +651,11 @@ async function saveTodo(): Promise<void> {
         const renderListFn = getGlobalRenderNoteList();
         if (renderListFn) renderListFn();
     } catch (e: any) {
+        // 持久化失败：回滚内存，避免 UI 渲染未持久化数据
+        const rollbackIdx = globalNotes.findIndex((n: any) => n.id === newNote.id);
+        if (rollbackIdx >= 0) globalNotes.splice(rollbackIdx, 1);
         console.error('保存便签失败:', e);
-        alert('保存便签失败：' + e.message);
+        alert('保存便签失败：' + ((e && e.message) || e));
         return;
     }
     elNoteText.value = '';
@@ -666,6 +669,7 @@ async function deleteNote(noteId: any): Promise<void> {
     if (!globalNotes) return;
     const idx = globalNotes.findIndex((n: any) => n.id === noteId);
     if (idx < 0) return;
+    const removed = globalNotes[idx];
     globalNotes.splice(idx, 1);
     try {
         const saveNotesFn = getGlobalSaveNotesToDisk();
@@ -673,7 +677,11 @@ async function deleteNote(noteId: any): Promise<void> {
         const renderListFn = getGlobalRenderNoteList();
         if (renderListFn) renderListFn();
     } catch (e: any) {
+        // 持久化失败：按原位置回滚，与 addAlarm/removeAlarm 的回滚模式保持一致
+        if (idx < globalNotes.length) globalNotes.splice(idx, 0, removed);
+        else globalNotes.push(removed);
         console.error('删除便签失败:', e);
+        alert('删除便签失败：' + ((e && e.message) || e));
     }
     renderMonthView();
     if (selectedDate) renderDayDetail(selectedDate);

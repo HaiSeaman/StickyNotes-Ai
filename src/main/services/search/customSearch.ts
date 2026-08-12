@@ -19,7 +19,7 @@ export class CustomSearchProvider implements ISearchProvider {
   readonly id = 'custom';
   readonly name = '自定义 SearXNG / API';
 
-  async search(query: string, config: WebSearchConfig): Promise<SearchResult[]> {
+  async search(query: string, config: WebSearchConfig, signal?: AbortSignal): Promise<SearchResult[]> {
     if (!config.apiUrl) {
       throw new Error('未配置自定义搜索 API 地址');
     }
@@ -29,6 +29,11 @@ export class CustomSearchProvider implements ISearchProvider {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 支持外部中止信号（用户中断搜索时一并取消请求）
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
 
     try {
       const urlStr = config.apiUrl.trim();
@@ -56,7 +61,9 @@ export class CustomSearchProvider implements ISearchProvider {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        throw new Error(`自定义搜索 API 响应错误 (HTTP ${response.status}): ${errorText || response.statusText}`);
+        // 安全加固：截断错误体，防止反向代理回显的 API key/凭据随错误信息进日志与 IPC
+        const errDetail = (errorText || response.statusText).slice(0, 500);
+        throw new Error(`自定义搜索 API 响应错误 (HTTP ${response.status}): ${errDetail}`);
       }
 
       const data = await response.json();

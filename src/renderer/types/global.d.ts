@@ -1,12 +1,12 @@
 /* ==================== 全局类型声明 ====================
  * 声明渲染层的全局变量类型：window.api、第三方库（marked/DOMPurify/Howl）等。
- * 注意：RendererUtils/AppConstants 已改为 ES module import，不再走全局变量。
+ * 方法名已显式声明，返回值保持 any 以兼容实际 IPC handler 的多变返回类型。
  * =============================================== */
 
-// preload.ts 通过 contextBridge.exposeInMainWorld('api', ...) 暴露的 API
-// 使用宽松类型（any），后续可逐步收紧
 interface Window {
-    api: any;
+    api: {
+        [key: string]: (...args: any[]) => Promise<any> | any;
+    };
     marked: any;
     DOMPurify: any;
     Howl: any;

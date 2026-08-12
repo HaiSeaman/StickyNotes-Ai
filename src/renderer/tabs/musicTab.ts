@@ -6,7 +6,7 @@
  * 搜索：200ms 防抖；持久化：1.5s 防抖
  * ====================================================== */
 
-import { debounce } from '../lib/rendererUtils.js';
+import { debounce, inferThumbPath } from '../lib/rendererUtils.js';
 import { Howl } from 'howler';
 
 // ============ 状态 ============
@@ -178,6 +178,14 @@ async function init(): Promise<void> {
     if (els.volumeSlider) els.volumeSlider.value = volume;
     applyVolume();
     updateVolumeUI();  // 初始化音量填充宽度与静音图标状态
+    // 后台补齐已有封面缩略图（幂等；补齐完成后重渲染列表以使用缩略图）
+    if (window.api && window.api.musicEnsureThumbs) {
+        window.api.musicEnsureThumbs().then((r: any) => {
+            if (r && r.success && r.generated > 0) {
+                renderPlaylist();
+            }
+        }).catch(() => {});
+    }
     // 封面加载失败时清除 src，露出底层占位符（音乐符号）
     if (els.coverImg) {
         els.coverImg.onerror = () => {
@@ -894,10 +902,23 @@ function renderPlaylist(): void {
 
         const cover = document.createElement('img');
         cover.className = 'music-item-cover';
-        cover.src = buildCoverUrl(t.coverPath) || defaultCoverSvg();
         cover.alt = '';
         cover.loading = 'lazy';
-        cover.onerror = () => { cover.src = defaultCoverSvg(); };
+        cover.decoding = 'async';
+        // 列表项优先缩略图（96×96），控制条大封面仍用原图
+        const thumbPath = t.thumbPath || inferThumbPath(t.coverPath);
+        const coverUrl = thumbPath ? buildCoverUrl(thumbPath) : '';
+        const origUrl = t.coverPath ? buildCoverUrl(t.coverPath) : '';
+        cover.dataset.origUrl = origUrl || '';
+        cover.src = coverUrl || origUrl || defaultCoverSvg();
+        cover.onerror = () => {
+            // 两级回退：缩略图失败 → 原图；原图失败 → 默认 SVG
+            if (cover.dataset.origUrl && cover.src !== cover.dataset.origUrl) {
+                cover.src = cover.dataset.origUrl;
+            } else {
+                cover.src = defaultCoverSvg();
+            }
+        };
 
         const info = document.createElement('div');
         info.className = 'music-item-info';

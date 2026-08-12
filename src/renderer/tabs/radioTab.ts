@@ -869,6 +869,8 @@ function switchTab(tabName: any): void {
 }
 
 // ============ 搜索 ============
+// 请求序号守卫：慢的旧请求晚返回时丢弃，防止覆盖新搜索结果（竞态）
+let searchReqId = 0;
 async function searchStations(query: any): Promise<void> {
     const q = (query || '').trim();
     searchQuery = q;
@@ -883,8 +885,10 @@ async function searchStations(query: any): Promise<void> {
         return;
     }
     updateStatus('搜索中...');
+    const myId = ++searchReqId;
     try {
         const result = await window.api.radioSearch({ keyword: q, limit: 100 });
+        if (myId !== searchReqId) return; // 已有更新的搜索请求，丢弃过期结果
         if (result.success && Array.isArray(result.stations)) {
             stations = result.stations;
             consecutiveErrors = 0;   // 搜索结果返回，重置错误计数
@@ -895,6 +899,7 @@ async function searchStations(query: any): Promise<void> {
             updateStatus('搜索失败');
         }
     } catch (e) {
+        if (myId !== searchReqId) return; // 过期请求的错误也丢弃
         console.error('[Radio] 搜索失败:', e);
         reportLog('error', ['[Radio] 搜索失败:', e]);
         handleError('搜索失败');

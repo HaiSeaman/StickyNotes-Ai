@@ -50,8 +50,8 @@ export interface ISearchProvider {
   readonly id: SearchProviderType;
   /** 提供商显示名称 */
   readonly name: string;
-  /** 执行搜索 */
-  search(query: string, config: WebSearchConfig): Promise<SearchResult[]>;
+  /** 执行搜索（signal 可选：支持用户中断时中止请求） */
+  search(query: string, config: WebSearchConfig, signal?: AbortSignal): Promise<SearchResult[]>;
   /** 连通性与 Key 有效性测试 */
   testConnection(config: WebSearchConfig): Promise<{ success: boolean; message: string; latencyMs?: number }>;
 }

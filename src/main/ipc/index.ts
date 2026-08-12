@@ -4,10 +4,11 @@
  * 业务逻辑逐字等价于 main.js，仅做类型化外壳。
  * 复用 main.ts 导出的辅助函数与根目录 JS 工具模块。
  * ==================================================================== */
-import { ipcMain, dialog, clipboard, nativeImage, BrowserWindow, app, safeStorage } from 'electron';
+import { ipcMain, dialog, clipboard, nativeImage, BrowserWindow, app, safeStorage, shell } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { thumbPathFor } from '../lib/coverThumbs.js';
 
 // 从 main.ts 导入共享状态与辅助函数（circular dep：运行时才调用，安全）
 import {
@@ -41,7 +42,6 @@ import {
     dashscopeGenerateVideo,
     buildOpenAiImageUrl,
     saveImageToDisk,
-    parseSSEStream,
     openPopoutWindow,
     openTodoPopoutWindow,
     togglePopoutPin,
@@ -105,9 +105,16 @@ import {
 } from '../lib/paths.js';
 
 // C3 修复：将音频文件路径（realpath 规范形式）注册到已批准集合，供 musicfile://audio/ 协议校验
+// 安全加固：注册前校验扩展名 ∈ 音频白名单且大小 ≤ 50MB（对齐协议 maxSize），
+// 防止渲染进程借 save-playlist/save-favorites 把任意文件注册进白名单后经 musicfile:// 读取
+const APPROVED_AUDIO_MAX_SIZE = 50 * 1024 * 1024;
 async function approveAudioPath(filePath: string): Promise<void> {
     try {
+        const ext = path.extname(filePath).toLowerCase();
+        if (!MUSIC_AUDIO_EXTENSIONS.includes(ext)) return; // 非音频扩展名拒绝
         const real = await fs.promises.realpath(filePath);
+        const st = await fs.promises.stat(real);
+        if (!st.isFile() || st.size > APPROVED_AUDIO_MAX_SIZE) return;
         approvedAudioPaths.add(real);
     } catch (_) { /* 文件不存在则忽略 */ }
 }
@@ -397,8 +404,6 @@ export function registerIpcHandlers(): void {
             detailFontSize: s.detailFontSize || null,
             alarmVolume: s.alarmVolume !== undefined ? s.alarmVolume : 100,
             launchAtLogin: !!(s.launchAtLogin),
-            lockHash: s.lockHash || null,
-            lockSalt: s.lockSalt || null
         };
     });
     ipcMain.handle('settings:save', (_event: any, settings: any) => {
@@ -496,7 +501,12 @@ export function registerIpcHandlers(): void {
                 trustedCertFingerprint: (webdavConfig.trustedCertFingerprint || '').trim()
             },
             autoSync: !!data.autoSync,
-            autoSyncInterval: data.autoSyncInterval || 30,
+            // 安全加固：autoSyncInterval 必须为 5-1440 的有限数值（分钟），非法值回退默认 30，防 setInterval 风暴
+            autoSyncInterval: (() => {
+                const v = Number(data.autoSyncInterval);
+                if (!Number.isFinite(v)) return 30;
+                return Math.min(1440, Math.max(5, Math.round(v))) || 30;
+            })(),
             autoSyncProvider: data.autoSyncProvider || 's3'
         };
         const r = persistSettings();
@@ -589,15 +599,26 @@ export function registerIpcHandlers(): void {
 
         // 1. 下载 ZIP
         const zipBuffer: Buffer = await provider.downloadBackup(config, fileId);
+        // 安全加固：ZIP 本体与解压产物都设上限，防 Zip bomb（高压缩比恶意备份导致 OOM/磁盘写满）
+        const MAX_BACKUP_ZIP_BYTES = 200 * 1024 * 1024;
+        const MAX_BACKUP_UNCOMPRESSED = 500 * 1024 * 1024;
+        const MAX_BACKUP_ENTRIES = 5000;
+        if (zipBuffer.length > MAX_BACKUP_ZIP_BYTES) {
+            throw new Error('备份文件过大（' + (zipBuffer.length / 1024 / 1024).toFixed(1) + 'MB），已拒绝恢复');
+        }
 
         // 2. 解压到 userData（覆盖现有文件）
         const AdmZip = require('adm-zip');
         const zip = new AdmZip(zipBuffer);
         const userDataDir = app.getPath('userData');
         let restoredCount = 0;
+        let restoredBytes = 0;
         // M6 修复：已知数据文件应为数组类型，校验结构防注入恶意数据
         const ARRAY_TYPE_FILES = new Set(['notes.json', 'todos.json', 'archived-todos.json', 'archived-notes.json', 'trashed-notes.json', 'archived-chats.json', 'trashed-chats.json', 'chat-images.json', 'music-playlist.json', 'radio-favorites.json']);
         const entries = zip.getEntries();
+        if (entries.length > MAX_BACKUP_ENTRIES) {
+            throw new Error('备份条目数过多（' + entries.length + ' > ' + MAX_BACKUP_ENTRIES + '），已拒绝恢复');
+        }
         for (const entry of entries) {
             if (entry.isDirectory) continue;
             if (entry.entryName === '_backup_meta.json') continue;
@@ -635,8 +656,13 @@ export function registerIpcHandlers(): void {
                     console.warn('跳过路径越界的备份条目:', entryName);
                     continue;
                 }
+                const data = entry.getData();
+                restoredBytes += data.length;
+                if (restoredBytes > MAX_BACKUP_UNCOMPRESSED) {
+                    throw new Error('备份解压超过 500MB 上限，已中止恢复');
+                }
                 try { fs.mkdirSync(path.dirname(targetPath), { recursive: true }); } catch (e: any) { console.warn('创建恢复目录失败:', e.message); continue; }
-                fs.writeFileSync(targetPath, entry.getData());
+                await fs.promises.writeFile(targetPath, data);
                 restoredCount++;
                 continue;
             }
@@ -644,6 +670,10 @@ export function registerIpcHandlers(): void {
             // 顶层 JSON：结构校验后写回
             if (!entryName.endsWith('.json')) continue;
             const entryData = entry.getData();
+            restoredBytes += entryData.length;
+            if (restoredBytes > MAX_BACKUP_UNCOMPRESSED) {
+                throw new Error('备份解压超过 500MB 上限，已中止恢复');
+            }
             let parsed: any;
             try {
                 parsed = JSON.parse(entryData.toString('utf8'));
@@ -660,7 +690,7 @@ export function registerIpcHandlers(): void {
                 continue;
             }
             const targetPath = path.join(userDataDir, baseName);
-            fs.writeFileSync(targetPath, entryData);
+            await fs.promises.writeFile(targetPath, entryData);
             restoredCount++;
         }
 
@@ -679,17 +709,37 @@ export function registerIpcHandlers(): void {
 
     /* ---------- 窗口控制（5 个 handle） ---------- */
     // 38. 最小化（隐藏到托盘）
-    ipcMain.handle('window:minimize', () => {
+    ipcMain.handle('window:minimize', (_event: any) => {
+        requireMainWindowSender(_event); // 仅主窗口可调用
         const mw = getMainWindow();
         if (!mw) return;
         mw.hide();
     });
 
     // 39. 关闭窗口
-    ipcMain.handle('window:close', () => { app.quit(); });
+    ipcMain.handle('window:close', (_event: any) => {
+        requireMainWindowSender(_event); // 仅主窗口可调用
+        app.quit();
+    });
+
+    // 39.1 在系统默认浏览器中打开外部 URL
+    ipcMain.handle('shell:open-external', async (_event: any, url: string) => {
+        if (!url || typeof url !== 'string') return false;
+        // 仅允许 http/https 协议，防 javascript:/file: 等危险协议
+        try {
+            const u = new URL(url);
+            if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+            await shell.openExternal(url);
+            return true;
+        } catch (e: any) {
+            console.warn('打开外部链接失败:', e.message);
+            return false;
+        }
+    });
 
     // 40. 闹钟响铃时显示窗口
-    ipcMain.handle('alarm:show-window', () => {
+    ipcMain.handle('alarm:show-window', (_event: any) => {
+        requireMainWindowSender(_event); // 仅主窗口可调用
         try {
             const mw = getMainWindow();
             if (!mw) return;
@@ -700,7 +750,8 @@ export function registerIpcHandlers(): void {
     });
 
     // 41. 最大化/还原切换
-    ipcMain.handle('window:maximize', () => {
+    ipcMain.handle('window:maximize', (_event: any) => {
+        requireMainWindowSender(_event); // 仅主窗口可调用
         const mw = getMainWindow();
         if (!mw) return false;
         if (mw.isMaximized()) {
@@ -714,6 +765,7 @@ export function registerIpcHandlers(): void {
 
     // 42. 窗口缩放（右下角手柄）
     ipcMain.handle('window:resize', (_event: any, w: number, h: number) => {
+        requireMainWindowSender(_event); // 仅主窗口可调用
         const mw = getMainWindow();
         if (!mw) return;
         if (!Number.isFinite(w) || !Number.isFinite(h)) return;
@@ -728,10 +780,31 @@ export function registerIpcHandlers(): void {
     });
 
     /* ---------- 软件锁 PIN（4 个 handle） ---------- */
-    // 43. 设置 PIN
-    ipcMain.handle('lock:set-pin', async (_event: any, pin: string) => {
+    // 43. 设置 PIN（安全加固：仅主窗口可调用；已设置 PIN 时必须验证当前 PIN 才能重设，防被攻陷窗口无鉴权覆盖锁）
+    ipcMain.handle('lock:set-pin', async (_event: any, pin: string, currentPin?: string) => {
+        requireMainWindowSender(_event); // 仅主窗口可调用
         if (!pin || !/^\d{4}$/.test(pin)) {
             return { success: false, message: 'PIN 必须为 4 位数字' };
+        }
+        const s = loadSettings();
+        if (s.lockHash && s.lockSalt) {
+            // 已设置过 PIN：要求验证当前 PIN（首次设置不受限）
+            if (!safeStorage.isEncryptionAvailable()) {
+                return { success: false, message: '系统加密服务不可用，无法安全校验 PIN。请登录系统账户后重试。' };
+            }
+            if (!currentPin) {
+                return { success: false, message: '请输入当前 PIN 以修改' };
+            }
+            let plainHash: string, plainSalt: string;
+            try {
+                plainHash = safeStorage.decryptString(Buffer.from(s.lockHash, 'base64'));
+                plainSalt = safeStorage.decryptString(Buffer.from(s.lockSalt, 'base64'));
+            } catch (e: any) {
+                return { success: false, message: 'PIN 解密失败，请重新设置' };
+            }
+            if (!(await verifyPin(currentPin, plainHash, plainSalt))) {
+                return { success: false, message: '当前 PIN 错误，无法修改' };
+            }
         }
         const { hash, salt } = await hashPin(pin);
         if (!safeStorage.isEncryptionAvailable()) {
@@ -744,7 +817,6 @@ export function registerIpcHandlers(): void {
         } catch (e: any) {
             return { success: false, message: '加密失败：' + e.message };
         }
-        const s = loadSettings();
         s.lockHash = encHash;
         s.lockSalt = encSalt;
         persistSettings();
@@ -994,7 +1066,8 @@ export function registerIpcHandlers(): void {
 
     /* ---------- 窗口置顶/固定（4 个 handle） ---------- */
     // 56. 切换主窗口置顶
-    ipcMain.handle('toggle-pin', () => {
+    ipcMain.handle('toggle-pin', (_event: any) => {
+        requireMainWindowSender(_event); // 仅主窗口可调用
         if (sharedState.isAppLocked) return sharedState.isPinned;
         const mw = getMainWindow();
         if (!mw) return false;
@@ -1008,7 +1081,8 @@ export function registerIpcHandlers(): void {
     ipcMain.handle('get-pin-state', () => sharedState.isPinned);
 
     // 58. 切换窗口固定
-    ipcMain.handle('toggle-fixed', () => {
+    ipcMain.handle('toggle-fixed', (_event: any) => {
+        requireMainWindowSender(_event); // 仅主窗口可调用
         if (sharedState.isAppLocked) return sharedState.isFixed;
         const mw = getMainWindow();
         if (!mw) return false;
@@ -1378,7 +1452,12 @@ export function registerIpcHandlers(): void {
                     webSearchConfig: searchConfig,
                     signal: ac.signal,
                     onChunk: (evt) => {
-                        sender.send('chat:chunk', evt);
+                        // 保护：发送目标 webContents 可能已销毁（popout/主窗口关闭），吞掉发送异常避免中断流
+                        try {
+                            if (!sender.isDestroyed()) sender.send('chat:chunk', evt);
+                        } catch (e: any) {
+                            console.warn('[ai:chat] 推送 chunk 失败:', e.message);
+                        }
                     }
                 });
             } catch (err: any) {
@@ -1857,6 +1936,18 @@ export function registerIpcHandlers(): void {
                                 await fs.promises.writeFile(coverFullPath, pic.data);
                             });
                             coverPath = coverFullPath;
+                            // 缩略图：96×96 JPEG，列表项使用（控制条大封面仍用原图）
+                            const thumbPath = thumbPathFor(coverFullPath);
+                            try {
+                                const img = nativeImage.createFromBuffer(pic.data);
+                                if (!img.isEmpty()) {
+                                    const thumbBuf = img.resize({ width: 96, height: 96, quality: 'good' }).toJPEG(85);
+                                    await fs.promises.mkdir(path.dirname(thumbPath), { recursive: true });
+                                    await fs.promises.access(thumbPath).catch(() => fs.promises.writeFile(thumbPath, thumbBuf));
+                                }
+                            } catch (e: any) {
+                                console.warn('[Music] 缩略图生成失败:', e.message);
+                            }
                         } catch (e: any) {
                             console.warn('[Music] 封面保存失败:', e.message);
                         }
@@ -1878,9 +1969,45 @@ export function registerIpcHandlers(): void {
                 album,
                 duration,
                 coverPath,
+                thumbPath: coverPath ? thumbPathFor(coverPath) : '',
                 size: st.size
             }
         };
+    }));
+
+    // 79b. 补齐已有封面缩略图（幂等：已存在跳过；供音乐 tab 激活时后台触发）
+    ipcMain.handle('music:ensure-thumbs', tryWrap(async () => {
+        const coversDir = getMusicCoversDir();
+        let entries: fs.Dirent[];
+        try {
+            entries = await fs.promises.readdir(coversDir, { withFileTypes: true });
+        } catch (_) {
+            return { success: true, generated: 0, skipped: 0 };
+        }
+        let generated = 0, skipped = 0;
+        for (const ent of entries) {
+            if (!ent.isFile()) continue; // 跳过 thumb 子目录等
+            const src = path.join(coversDir, ent.name);
+            const thumb = thumbPathFor(src);
+            try {
+                await fs.promises.access(thumb);
+                skipped++;
+                continue;
+            } catch (_) { /* 缩略图缺失，需生成 */ }
+            try {
+                const buf = await fs.promises.readFile(src);
+                const img = nativeImage.createFromBuffer(buf);
+                if (img.isEmpty()) { skipped++; continue; }
+                const thumbBuf = img.resize({ width: 96, height: 96, quality: 'good' }).toJPEG(85);
+                await fs.promises.mkdir(path.dirname(thumb), { recursive: true });
+                await fs.promises.writeFile(thumb, thumbBuf);
+                generated++;
+            } catch (e: any) {
+                console.warn('[Music] 缩略图生成失败:', src, e.message);
+                skipped++;
+            }
+        }
+        return { success: true, generated, skipped };
     }));
 
     // 79. 加载播放列表

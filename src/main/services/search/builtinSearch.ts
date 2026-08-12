@@ -41,12 +41,17 @@ export class BuiltinSearchProvider implements ISearchProvider {
   readonly id = 'builtin';
   readonly name = '内置免配置 (国内直连)';
 
-  async search(query: string, config: WebSearchConfig): Promise<SearchResult[]> {
+  async search(query: string, config: WebSearchConfig, signal?: AbortSignal): Promise<SearchResult[]> {
     const maxResults = config.maxResults || 5;
     const timeoutMs = config.timeoutMs || 8000;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 支持外部中止信号（用户中断搜索时一并取消请求）
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
 
     try {
       // 访问 Bing 国内中文端点，无需 API Key

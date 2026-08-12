@@ -45,10 +45,13 @@ export class SearchManager {
    * @param query 搜索关键词
    * @param config 搜索配置
    */
-  public async search(query: string, config: WebSearchConfig): Promise<{ results: SearchResult[]; usedProvider: string; fallback: boolean }> {
+  public async search(query: string, config: WebSearchConfig, signal?: AbortSignal): Promise<{ results: SearchResult[]; usedProvider: string; fallback: boolean }> {
     const trimmedQuery = (query || '').trim();
     if (!trimmedQuery) {
       return { results: [], usedProvider: 'none', fallback: false };
+    }
+    if (signal?.aborted) {
+      throw new Error('搜索已取消');
     }
 
     const providerId = config.provider || 'builtin';
@@ -58,12 +61,13 @@ export class SearchManager {
     if (primaryProvider && providerId !== 'builtin') {
       try {
         console.log(`[SearchManager] 尝试使用主搜索源 [${primaryProvider.name}] 检索: "${trimmedQuery}"`);
-        const results = await primaryProvider.search(trimmedQuery, config);
+        const results = await primaryProvider.search(trimmedQuery, config, signal);
         if (results && results.length > 0) {
           return { results, usedProvider: primaryProvider.name, fallback: false };
         }
         console.warn(`[SearchManager] 主搜索源 [${primaryProvider.name}] 返回空结果，准备降级至内置免配置源`);
       } catch (err: any) {
+        if (signal?.aborted) throw err; // 用户取消时不触发降级
         console.warn(`[SearchManager] 主搜索源 [${primaryProvider.name}] 请求异常: ${err.message}，自动触发容灾降级`);
       }
     }
@@ -71,13 +75,14 @@ export class SearchManager {
     // 容灾降级：使用内置直连免配置搜索源
     console.log(`[SearchManager] 使用内置免配置搜索源检索: "${trimmedQuery}"`);
     try {
-      const fallbackResults = await this.builtinProvider.search(trimmedQuery, config);
+      const fallbackResults = await this.builtinProvider.search(trimmedQuery, config, signal);
       return {
         results: fallbackResults,
         usedProvider: this.builtinProvider.name,
         fallback: providerId !== 'builtin'
       };
     } catch (builtinErr: any) {
+      if (signal?.aborted) throw builtinErr;
       console.error(`[SearchManager] 内置搜索源执行失败:`, builtinErr);
       throw new Error(`网络搜索失败: ${builtinErr.message}`);
     }
