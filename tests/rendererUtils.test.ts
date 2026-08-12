@@ -45,6 +45,12 @@ describe('nextIndexInPool', () => {
         const result = nextIndexInPool([2, 5, 7], 3, 'shuffle', rng);
         expect([2, 5, 7]).toContain(result);
     });
+    it('随机模式：固定 rng 命中当前项时不死循环（排除法偏移）', () => {
+        // 旧实现 while(idx===pos) 在固定 rng 下会死循环；新实现排除法正常返回
+        const result = nextIndexInPool([2, 5, 7, 9], 7, 'shuffle', () => 0.5);
+        expect([2, 5, 7, 9]).toContain(result);
+        expect(result).not.toBe(7);
+    });
 });
 
 describe('prevIndexInPool', () => {

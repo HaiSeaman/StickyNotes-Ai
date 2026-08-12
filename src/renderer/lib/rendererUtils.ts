@@ -81,9 +81,10 @@ export function nextIndexInPool(
     if (mode === 'shuffle') {
         if (pool.length === 1) return pool[0];
         if (pos === -1) return pool[Math.floor(rand() * pool.length)];
-        let idx = pos;
-        while (idx === pos) idx = Math.floor(rand() * pool.length);
-        return pool[idx];
+        // 排除当前项：在其余 pool.length-1 项中均匀随机。
+        // 用偏移量而非 while 重试，避免固定 rng（测试注入）命中当前项时死循环
+        const offset = Math.floor(rand() * (pool.length - 1));
+        return pool[(pos + 1 + offset) % pool.length];
     }
     // sequential
     if (pos === -1) return pool[0];

@@ -435,6 +435,7 @@ function clearPlaylist(): void {
     currentIndex = -1;
     isPlaying = false;
     shuffleHistory = [];
+    pendingReturnToFavorites = false;  // 清空播放列表时同步清除待切状态，避免状态泄漏
     renderPlaylist();
     updatePlayButton();
     updateNowPlaying();
@@ -736,6 +737,8 @@ function deleteTrack(index: number): void {
         if (progressTimerId) { clearInterval(progressTimerId); progressTimerId = null; }
     }
     playlist.splice(index, 1);
+    // 立即重建收藏索引池：下方 wasCurrent 接续播放判断需要删除后的最新池
+    rebuildFavoriteIndices();
     // 修正随机历史记录中的索引，防止切上一首时越界或播错
     shuffleHistory = shuffleHistory
         .filter(i => i !== index)
@@ -743,6 +746,13 @@ function deleteTrack(index: number): void {
     if (wasCurrent) {
         // 删除的就是当前曲：若后面还有曲（已前移到 index），直接播它；否则停止
         if (index < playlist.length) {
+            // 收藏模式删除当前收藏曲后，若接续曲目非收藏 → 置待切（播完再切），
+            // 避免收藏模式下播到非收藏曲目；同步清理历史栈防"上一首"回退到非收藏曲
+            if (favoritesActive && !favoriteIndices.includes(index)) {
+                pendingReturnToFavorites = true;
+                shuffleHistory = shuffleHistory.filter(i => favoriteIndices.includes(i));
+                if (shuffleHistory.length <= 1) shuffleHistory = [];
+            }
             playTrack(index);
             // 修复：playTrack 内部只调用 updateNowPlaying/updatePlayingHighlight，
             // 从不重建列表 DOM。此处必须显式 renderPlaylist()，
