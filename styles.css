@@ -1815,6 +1815,12 @@ input,textarea,select{user-select:text;-webkit-user-select:text}
     flex:1;min-height:0;overflow:hidden;position:relative;
     border:1px solid var(--border);border-radius:6px;background:var(--surface);
 }
+.music-tip{
+    position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:10;
+    max-width:90%;padding:6px 14px;border-radius:6px;
+    background:rgba(0,0,0,0.75);color:#fff;font-size:12px;line-height:1.5;
+    pointer-events:none;white-space:nowrap;
+}
 .music-list{
     height:100%;overflow-y:auto;padding:4px;
     scrollbar-width:thin;scrollbar-color:var(--border) transparent;
