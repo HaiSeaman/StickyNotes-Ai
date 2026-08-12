@@ -6,7 +6,7 @@
  * 搜索：200ms 防抖；持久化：1.5s 防抖
  * ====================================================== */
 
-import { debounce, inferThumbPath } from '../lib/rendererUtils.js';
+import { debounce, inferThumbPath, nextIndexInPool, prevIndexInPool } from '../lib/rendererUtils.js';
 import { Howl } from 'howler';
 
 // ============ 状态 ============
@@ -479,6 +479,11 @@ function playTrack(index: number, manual?: boolean): void {
         }
     }
 
+    // 手动点击列表曲目：收藏模式下点击项必为收藏歌，直接进入收藏范围（清除待切）
+    if (manual && favoritesActive && favoriteIndices.includes(index)) {
+        pendingReturnToFavorites = false;
+    }
+
     const howlOpts: any = {
         src: [buildAudioUrl(track.filePath)],
         html5: true,          // 流式加载，避免大文件一次性载入内存
@@ -573,43 +578,65 @@ function togglePlay(): void {
 
 function next(autoNext?: boolean): void {
     if (playlist.length === 0) return;
+    const pool = getPlayablePool();
+    if (pool.length === 0) {
+        // 收藏池为空（运行中全部取消收藏）：停止并复位，避免越界
+        isPlaying = false;
+        updatePlayButton();
+        if (progressTimerId) { clearInterval(progressTimerId); progressTimerId = null; }
+        return;
+    }
+    // 待切状态：当前在播非收藏歌，切歌时落回收藏池（顺序→池内第一首；随机→池内随机）
+    if (pendingReturnToFavorites) {
+        pendingReturnToFavorites = false;
+        const idx = playMode === 'shuffle'
+            ? nextIndexInPool(pool, currentIndex, 'shuffle')
+            : nextIndexInPool(pool, currentIndex, 'sequential');
+        playTrack(idx);
+        return;
+    }
     if (playMode === 'shuffle') {
-        // 随机：选一个不同于当前的索引
-        if (playlist.length === 1) {
+        // 随机：选一个不同于当前的索引（单曲自动切歌时停止，避免空转）
+        if (pool.length === 1) {
             if (autoNext) {
-                // 单曲 end 已触发但无下一首可切：同步停止状态，避免卡在"播放中"
                 isPlaying = false;
                 updatePlayButton();
                 if (progressTimerId) { clearInterval(progressTimerId); progressTimerId = null; }
                 return;
             }
+            playTrack(pool[0]);
+            return;
         }
-        let idx;
-        do {
-            idx = Math.floor(Math.random() * playlist.length);
-        } while (idx === currentIndex && playlist.length > 1);
-        playTrack(idx);
+        playTrack(nextIndexInPool(pool, currentIndex, 'shuffle'));
         return;
     }
-    // 顺序 / 单曲循环的"下一首"行为：线性前进，末尾循环到第一首
-    let idx = currentIndex + 1;
-    if (idx >= playlist.length) idx = 0;
-    playTrack(idx);
+    // 顺序 / 单曲循环的"下一首"行为：池内线性前进，池尾循环到池首
+    playTrack(nextIndexInPool(pool, currentIndex, 'sequential'));
 }
 
 function prev(): void {
     if (playlist.length === 0) return;
-    // 随机模式：从历史栈弹出
+    // 随机模式：从历史栈弹出（栈内索引在置待切时已清理为非收藏，回退天然在池内）
     if (playMode === 'shuffle' && shuffleHistory.length > 1) {
         shuffleHistory.pop();  // 弹出当前
         const prevIdx = shuffleHistory[shuffleHistory.length - 1];
         if (prevIdx !== undefined) {
+            pendingReturnToFavorites = false;
             playTrack(prevIdx);
             return;
         }
     }
-    let idx = currentIndex - 1;
-    if (idx < 0) idx = playlist.length - 1;
+    const pool = getPlayablePool();
+    if (pool.length === 0) return;
+    let idx: number;
+    if (playMode === 'shuffle') {
+        // 栈空或仅含当前：池内随机一首
+        idx = nextIndexInPool(pool, currentIndex, 'shuffle');
+    } else {
+        // 顺序：池内回退；current 不在池内（待切）→ 池内第一首
+        idx = prevIndexInPool(pool, currentIndex);
+    }
+    pendingReturnToFavorites = false;
     playTrack(idx);
 }
 
