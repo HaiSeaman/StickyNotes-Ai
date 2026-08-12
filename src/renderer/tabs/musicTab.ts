@@ -315,6 +315,7 @@ async function addFiles(): Promise<void> {
             });
         }
         playlist = playlist.concat(newTracks);
+        rebuildFavoriteIndices();
         renderPlaylist();
         savePlaylistDebounced();
     } catch (e) {
@@ -350,6 +351,7 @@ async function addFolder(): Promise<void> {
             });
         }
         playlist = playlist.concat(newTracks);
+        rebuildFavoriteIndices();
         renderPlaylist();
         savePlaylistDebounced();
         if (scan.truncated) {
@@ -396,6 +398,7 @@ async function rescanSavedFolders(quiet: boolean = false): Promise<void> {
         }
     }
     if (addedCount > 0) {
+        rebuildFavoriteIndices();
         renderPlaylist();
         savePlaylistDebounced();
     }
@@ -757,6 +760,7 @@ function deleteTrack(index: number): void {
         currentIndex--;
     }
     savePlaylistDebounced();
+    rebuildFavoriteIndices();
     renderPlaylist();
 }
 
@@ -813,12 +817,19 @@ function toggleFavorite(index: number): void {
     
     savePlaylistDebounced();
     saveFavoritesDebounced();
+    rebuildFavoriteIndices();
+    // 收藏模式中取消收藏当前曲：置待切（播完再切）+ 清理历史栈非收藏索引
+    if (favoritesActive && !track.favorite && index === currentIndex) {
+        pendingReturnToFavorites = true;
+        shuffleHistory = shuffleHistory.filter(i => favoriteIndices.includes(i));
+        if (shuffleHistory.length <= 1) shuffleHistory = [];
+    }
     // 若修改的是当前播放的曲目，同步更新控制条收藏按钮
     if (index === currentIndex) {
         updateNowPlayingFavButton(track);
     }
     // 收藏过滤开启且取消收藏时：需重新渲染将该曲移出列表
-    if (showFavoritesOnly && !track.favorite) {
+    if (favoritesActive && !track.favorite) {
         renderPlaylist();
         return;
     }
@@ -954,7 +965,7 @@ function renderPlaylist(): void {
     const filtered = playlist
         .map((t, i) => ({ t, i }))
         .filter(x => trackMatchesSearch(x.t))
-        .filter(x => !showFavoritesOnly || x.t.favorite === true);
+        .filter(x => !favoritesActive || x.t.favorite === true);
     if (filtered.length === 0) {
         els.listContainer.innerHTML = '';
         if (els.emptyHint) {
@@ -962,7 +973,7 @@ function renderPlaylist(): void {
             let msg;
             if (playlist.length === 0) {
                 msg = '点击「+文件」或「+文件夹」添加音乐';
-            } else if (showFavoritesOnly) {
+            } else if (favoritesActive) {
                 msg = '暂无收藏音乐';
             } else {
                 msg = '没有匹配的曲目';
@@ -979,8 +990,8 @@ function renderPlaylist(): void {
         const item = document.createElement('div');
         item.className = 'music-item' + (i === currentIndex ? ' playing' : '');
         item.dataset.index = String(i);
-        // 过滤状态（搜索中或仅显示收藏）下禁用拖拽排序，防止局部列表排序乱序全局播放列表
-        if (searchQuery || showFavoritesOnly) {
+        // 过滤状态（搜索中或收藏模式）下禁用拖拽排序，防止局部列表排序乱序全局播放列表
+        if (searchQuery || favoritesActive) {
             item.draggable = false;
         } else {
             item.draggable = true;
@@ -1117,6 +1128,7 @@ function setupDragSort(container: any): void {
             currentIndex++;
         }
         dragSrcIdx = -1;  // 重置，防止 drop 后再次触发
+        rebuildFavoriteIndices();
         renderPlaylist();
         savePlaylistDebounced();
     });
