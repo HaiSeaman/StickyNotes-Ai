@@ -133,6 +133,7 @@ async function init(): Promise<void> {
         nextBtn: document.getElementById('musicNextBtn'),
         modeBtn: document.getElementById('musicModeBtn'),
         favFilterBtn: document.getElementById('musicFavFilterBtn'),
+        tip: document.getElementById('musicTip'),
         volumeSlider: document.getElementById('musicVolume'),
         volumeFill: document.getElementById('musicVolumeFill'),
         volIconBtn: document.getElementById('musicVolIconBtn'),
@@ -161,10 +162,22 @@ async function init(): Promise<void> {
                     t.favorite = true;
                 }
             }
+            rebuildFavoriteIndices();
         }
     } catch (e) {
         console.warn('[Music] 加载数据失败:', e);
         reportLog('warn', ['[Music] 加载数据失败:', e]);
+    }
+
+    // 恢复收藏夹播放模式（轻量 localStorage，参考 music_volume）
+    const savedActive = localStorage.getItem('music_favorites_active');
+    favoritesActive = savedActive === '1';
+    if (favoritesActive) {
+        if (els.favFilterBtn) {
+            els.favFilterBtn.classList.add('active');
+            els.favFilterBtn.setAttribute('aria-pressed', 'true');
+            els.favFilterBtn.title = '取消收藏模式';
+        }
     }
 
     bindEvents();
@@ -226,7 +239,7 @@ function bindEvents(): void {
         els.modeBtn.addEventListener('click', togglePlayMode);
     }
     if (els.favFilterBtn) {
-        els.favFilterBtn.addEventListener('click', toggleFavFilter);
+        els.favFilterBtn.addEventListener('click', toggleFavoritesMode);
     }
     if (els.trackFavBtn) {
         els.trackFavBtn.addEventListener('click', toggleNowPlayingFavorite);
@@ -653,12 +666,31 @@ function showTip(msg: string): void {
 }
 
 // ============ 收藏夹过滤 ============
-function toggleFavFilter(): void {
-    showFavoritesOnly = !showFavoritesOnly;
+function toggleFavoritesMode(): void {
+    if (!favoritesActive) {
+        // 尝试激活
+        if (favoriteIndices.length === 0) {
+            showTip('暂无收藏音乐，请先收藏一些歌曲');
+            return; // 空收藏夹：拒绝激活，播放与列表保持不变
+        }
+        favoritesActive = true;
+        localStorage.setItem('music_favorites_active', '1');
+        // 当前曲非收藏 → 待切（播完再切）；同步清理历史栈中非收藏索引，
+        // 保证随机模式"上一首"回退只落在收藏池内
+        if (currentIndex >= 0 && !favoriteIndices.includes(currentIndex)) {
+            pendingReturnToFavorites = true;
+            shuffleHistory = shuffleHistory.filter(i => favoriteIndices.includes(i));
+            if (shuffleHistory.length <= 1) shuffleHistory = [];
+        }
+    } else {
+        favoritesActive = false;
+        pendingReturnToFavorites = false;
+        localStorage.removeItem('music_favorites_active');
+    }
     if (els.favFilterBtn) {
-        els.favFilterBtn.classList.toggle('active', showFavoritesOnly);
-        els.favFilterBtn.setAttribute('aria-pressed', String(showFavoritesOnly));
-        els.favFilterBtn.title = showFavoritesOnly ? '显示全部曲目' : '仅显示收藏';
+        els.favFilterBtn.classList.toggle('active', favoritesActive);
+        els.favFilterBtn.setAttribute('aria-pressed', String(favoritesActive));
+        els.favFilterBtn.title = favoritesActive ? '取消收藏模式' : '激活收藏夹播放';
     }
     renderPlaylist();
 }
