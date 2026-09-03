@@ -1,6 +1,6 @@
 {
   "name": "js-sticky-note",
-  "version": "1.0.0",
+  "version": "2.9.0",
   "productName": "便签",
   "description": "Windows 桌面便签 - Electron 毛玻璃风格",
   "main": "dist/main.js",
