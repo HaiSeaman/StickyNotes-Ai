@@ -66,6 +66,11 @@
                     <span>FM 收音机</span>
                     <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
                 </button>
+                <button class="settings-item" id="settingsLockBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    <span>软件锁 PIN</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
             </div>
         </div>
         <!-- 闹钟音量三级面板（仿透明度面板风格，支持 0-300% 增益放大） -->
@@ -119,15 +124,6 @@
             <div class="fm-field">
                 <label class="fm-label" for="fmTimeout">请求超时（ms）</label>
                 <input type="number" id="fmTimeout" class="fm-input" min="3000" max="30000" step="1000" value="10000">
-            </div>
-            <div class="fm-field">
-                <label class="fm-label" for="fmDefaultCountry">默认国家</label>
-                <input type="text" id="fmDefaultCountry" class="fm-input" placeholder="China" maxlength="64">
-            </div>
-            <div class="fm-field fm-field-inline">
-                <label class="fm-label" for="fmEnableProxy">启用代理</label>
-                <input type="checkbox" id="fmEnableProxy" class="fm-checkbox">
-                <span class="fm-hint">复用项目代理配置</span>
             </div>
             <div class="fm-field">
                 <label class="fm-label">自定义电台列表</label>
@@ -982,6 +978,14 @@
         </div>
         <div class="lock-title" id="setPinTitle">设置软件锁 PIN</div>
         <div class="lock-subtitle">请输入 4 位数字 PIN</div>
+        <!-- 修改 PIN 时需先验证当前 PIN（已设置过 PIN 才显示） -->
+        <div class="lock-subtitle" id="setPinCurrentLabel" style="margin-top:8px;display:none">当前 PIN</div>
+        <div class="lock-pin-inputs" id="setPinCurrentInputs" role="group" aria-label="当前 PIN 输入框" style="display:none">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="0" aria-label="当前 PIN 第 1 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="1" aria-label="当前 PIN 第 2 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="2" aria-label="当前 PIN 第 3 位">
+            <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="3" aria-label="当前 PIN 第 4 位">
+        </div>
         <div class="lock-pin-inputs" id="setPinInputs" role="group" aria-label="设置 PIN 输入框">
             <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="0" aria-label="设置 PIN 第 1 位">
             <input type="password" inputmode="numeric" maxlength="1" class="lock-pin-box" data-idx="1" aria-label="设置 PIN 第 2 位">
@@ -998,6 +1002,7 @@
         <div class="lock-message" id="setPinMessage" role="status" aria-live="polite"></div>
         <div class="lock-actions">
             <button class="lock-btn lock-submit-btn" id="setPinConfirmBtn" aria-label="确认设置 PIN">确认设置</button>
+            <button class="lock-btn lock-exit-btn" id="setPinClearBtn" aria-label="清除 PIN" style="display:none">清除 PIN</button>
             <button class="lock-btn lock-exit-btn" id="setPinCancelBtn" aria-label="取消设置 PIN">取消</button>
         </div>
     </div>

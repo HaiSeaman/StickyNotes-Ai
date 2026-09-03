@@ -18,25 +18,35 @@
 import { genId, previewText, toISODate, isToday } from '../lib/shared-utils.js';
 
 /* ==================== window 全局对象获取函数 ====================
- * 这些变量/函数由 renderer.ts 在 window 作用域提供，本模块通过安全的 window 函数封装访问。
+ * 这些变量/函数由 renderer.ts 在 window 作用域提供，本模块通过安全的 window 访问。
+ * 注：6 个 getGlobalXxx 函数已收敛为单个 getGlobal（行为等价，防御检查保留）。
  */
+function getGlobal(key: string): any {
+    return (window as any)[key];
+}
 function getGlobalNotes(): any[] | null {
-    return Array.isArray((window as any).notes) ? (window as any).notes : null;
+    const v = getGlobal('notes');
+    return Array.isArray(v) ? v : null;
 }
 function getGlobalAlarms(): any[] | null {
-    return Array.isArray((window as any).alarms) ? (window as any).alarms : null;
+    const v = getGlobal('alarms');
+    return Array.isArray(v) ? v : null;
 }
 function getGlobalSaveAlarms(): Function | null {
-    return typeof (window as any).saveAlarms === 'function' ? (window as any).saveAlarms : null;
+    const v = getGlobal('saveAlarms');
+    return typeof v === 'function' ? v : null;
 }
 function getGlobalSaveNotesToDisk(): Function | null {
-    return typeof (window as any).saveNotesToDisk === 'function' ? (window as any).saveNotesToDisk : null;
+    const v = getGlobal('saveNotesToDisk');
+    return typeof v === 'function' ? v : null;
 }
 function getGlobalRenderNoteList(): Function | null {
-    return typeof (window as any).renderNoteList === 'function' ? (window as any).renderNoteList : null;
+    const v = getGlobal('renderNoteList');
+    return typeof v === 'function' ? v : null;
 }
 function getGlobalSwitchNote(): Function | null {
-    return typeof (window as any).switchNote === 'function' ? (window as any).switchNote : null;
+    const v = getGlobal('switchNote');
+    return typeof v === 'function' ? v : null;
 }
 
 /* ==================== 状态 ==================== */

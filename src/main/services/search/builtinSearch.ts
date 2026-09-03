@@ -1,16 +1,5 @@
 import { ISearchProvider, SearchResult, WebSearchConfig } from './types';
-
-/**
- * 提取 URL 的主域名
- */
-function extractHostname(rawUrl: string): string {
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.hostname.replace(/^www\./i, '');
-  } catch {
-    return 'web';
-  }
-}
+import { extractHostname, faviconFor, withFetchSignal, toFriendlyError } from './common';
 
 /**
  * 清洗和去噪文本（去除 HTML 标签、多余换行与特殊转义字符）
@@ -44,21 +33,14 @@ export class BuiltinSearchProvider implements ISearchProvider {
   async search(query: string, config: WebSearchConfig, signal?: AbortSignal): Promise<SearchResult[]> {
     const maxResults = config.maxResults || 5;
     const timeoutMs = config.timeoutMs || 8000;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    // 支持外部中止信号（用户中断搜索时一并取消请求）
-    if (signal) {
-      if (signal.aborted) controller.abort();
-      else signal.addEventListener('abort', () => controller.abort(), { once: true });
-    }
+    const { signal: reqSignal, cleanup } = withFetchSignal(signal, timeoutMs);
 
     try {
       // 访问 Bing 国内中文端点，无需 API Key
       const searchUrl = `https://cn.bing.com/search?q=${encodeURIComponent(query)}&setmkt=zh-CN&setlang=zh-Hans`;
-      
+
       const response = await fetch(searchUrl, {
-        signal: controller.signal,
+        signal: reqSignal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -81,12 +63,9 @@ export class BuiltinSearchProvider implements ISearchProvider {
 
       return results;
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        throw new Error(`内置搜索超时 (${timeoutMs}ms)`);
-      }
-      throw err;
+      throw toFriendlyError(err, '内置搜索', timeoutMs);
     } finally {
-      clearTimeout(timer);
+      cleanup();
     }
   }
 
@@ -95,7 +74,7 @@ export class BuiltinSearchProvider implements ISearchProvider {
    */
   private parseBingHtml(html: string, maxResults: number): SearchResult[] {
     const results: SearchResult[] = [];
-    
+
     // 正则匹配 Bing 的核心搜索结果卡片 <li class="b_algo">...</li>
     const itemRegex = /<li\s+class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
     let match: RegExpExecArray | null;
@@ -137,7 +116,7 @@ export class BuiltinSearchProvider implements ISearchProvider {
         url: rawUrl,
         snippet: snippet || title,
         siteName: hostname,
-        favicon: `https://www.google.com/s2/favicons?domain=${hostname}&sz=32`
+        favicon: faviconFor(hostname)
       });
     }
 
@@ -174,7 +153,7 @@ export class BuiltinSearchProvider implements ISearchProvider {
         url,
         snippet: title,
         siteName: hostname,
-        favicon: `https://www.google.com/s2/favicons?domain=${hostname}&sz=32`
+        favicon: faviconFor(hostname)
       });
     }
 

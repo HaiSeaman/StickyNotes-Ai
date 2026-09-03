@@ -22,8 +22,6 @@
   "license": "MIT",
   "devDependencies": {
     "@electron/packager": "^20.0.4",
-    "@types/adm-zip": "^0.5.8",
-    "@types/dompurify": "^3.0.5",
     "@types/howler": "^2.2.13",
     "@types/node": "^26.1.2",
     "electron": "^42.7.1",

@@ -1,16 +1,5 @@
 import { ISearchProvider, SearchResult, WebSearchConfig } from './types';
-
-/**
- * 提取 URL 的主域名
- */
-function extractHostname(rawUrl: string): string {
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.hostname.replace(/^www\./i, '');
-  } catch {
-    return 'web';
-  }
-}
+import { extractHostname, faviconFor, withFetchSignal, truncateErrorDetail, toFriendlyError, testConnectionGeneric } from './common';
 
 /**
  * Tavily AI Search 适配器 (专为 LLM 设计的高质量搜索引擎)
@@ -27,19 +16,12 @@ export class TavilySearchProvider implements ISearchProvider {
     const endpoint = config.apiUrl?.trim() || 'https://api.tavily.com/search';
     const maxResults = config.maxResults || 5;
     const timeoutMs = config.timeoutMs || 8000;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    // 支持外部中止信号（用户中断搜索时一并取消请求）
-    if (signal) {
-      if (signal.aborted) controller.abort();
-      else signal.addEventListener('abort', () => controller.abort(), { once: true });
-    }
+    const { signal: reqSignal, cleanup } = withFetchSignal(signal, timeoutMs);
 
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
-        signal: controller.signal,
+        signal: reqSignal,
         headers: {
           'Content-Type': 'application/json'
         },
@@ -55,7 +37,7 @@ export class TavilySearchProvider implements ISearchProvider {
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
         // 安全加固：截断错误体，防止反向代理回显的 API key/凭据随错误信息进日志与 IPC
-        const errDetail = (errorText || response.statusText).slice(0, 500);
+        const errDetail = truncateErrorDetail(errorText, response.statusText);
         throw new Error(`Tavily API 响应错误 (HTTP ${response.status}): ${errDetail}`);
       }
 
@@ -74,7 +56,7 @@ export class TavilySearchProvider implements ISearchProvider {
           url: item.url,
           snippet: item.content || item.raw_content || '',
           siteName: hostname,
-          favicon: `https://www.google.com/s2/favicons?domain=${hostname}&sz=32`,
+          favicon: faviconFor(hostname),
           publishedDate: item.published_date
         });
         if (results.length >= maxResults) break;
@@ -82,30 +64,13 @@ export class TavilySearchProvider implements ISearchProvider {
 
       return results;
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        throw new Error(`Tavily 搜索超时 (${timeoutMs}ms)`);
-      }
-      throw err;
+      throw toFriendlyError(err, 'Tavily', timeoutMs);
     } finally {
-      clearTimeout(timer);
+      cleanup();
     }
   }
 
   async testConnection(config: WebSearchConfig): Promise<{ success: boolean; message: string; latencyMs?: number }> {
-    const startTime = Date.now();
-    try {
-      const results = await this.search('test', { ...config, maxResults: 1 });
-      const latencyMs = Date.now() - startTime;
-      return {
-        success: true,
-        message: `Tavily 连接成功 (耗时: ${latencyMs}ms，检索到 ${results.length} 条数据)`,
-        latencyMs
-      };
-    } catch (err: any) {
-      return {
-        success: false,
-        message: `Tavily 连接失败: ${err.message || '未知错误'}`
-      };
-    }
+    return testConnectionGeneric('Tavily', (q, cfg, sig) => this.search(q, cfg, sig), config);
   }
 }

@@ -151,21 +151,11 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
 }
 
 /**
- * SSRF 防护（同步、词法层面）：校验 URL 是否为允许的外网 HTTPS 地址。
- * 注意：仅做词法校验，无法防 DNS rebinding。安全敏感场景请用 isSafeExternalUrlAsync。
- */
-export function isSafeExternalUrl(urlStr: string): boolean {
-    if (!urlStr || typeof urlStr !== 'string') return false;
-    let u: URL;
-    try { u = new URL(urlStr); } catch (_) { return false; }
-    if (u.protocol !== 'https:') return false;
-    return !isPrivateOrLoopbackHost(u.hostname);
-}
-
-/**
  * SSRF 防护（异步、含 DNS 解析）：校验 URL 是否为允许的外网 HTTPS 地址。
  * 解析 hostname 的所有 A/AAAA 记录，任一为内网/环回地址即拒绝。
  * 可防 DNS rebinding 的基本形式（解析阶段校验）。
+ * 说明：同步词法版（isSafeExternalUrl）已在死代码清理中移除——
+ * 全项目生产代码仅使用本 Async 版（词法判断已内联在 isPrivateOrLoopbackHost）。
  */
 export async function isSafeExternalUrlAsync(urlStr: string): Promise<boolean> {
     if (!urlStr || typeof urlStr !== 'string') return false;
@@ -203,20 +193,9 @@ export function validateAiBaseUrl(baseUrl: string, label?: string): void {
 }
 
 /**
- * SSRF 防护（同步、宽松版）：允许 http: 协议（用于网络电台流）。
- * 注意：仅做词法校验，无法防 DNS rebinding。安全敏感场景请用 isSafePublicStreamUrlAsync。
- */
-export function isSafePublicStreamUrl(urlStr: string): boolean {
-    if (!urlStr || typeof urlStr !== 'string') return false;
-    let u: URL;
-    try { u = new URL(urlStr); } catch (_) { return false; }
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-    return !isPrivateOrLoopbackHost(u.hostname);
-}
-
-/**
  * SSRF 防护（异步、宽松版、含 DNS 解析）：允许 http: 协议（用于网络电台流）。
  * 解析 hostname 的所有 A/AAAA 记录，任一为内网/环回地址即拒绝。
+ * 说明：同步宽松版（isSafePublicStreamUrl）已在死代码清理中移除——全项目仅用本 Async 版。
  */
 export async function isSafePublicStreamUrlAsync(urlStr: string): Promise<boolean> {
     if (!urlStr || typeof urlStr !== 'string') return false;

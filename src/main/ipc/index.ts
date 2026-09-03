@@ -45,7 +45,6 @@ import {
     openPopoutWindow,
     openTodoPopoutWindow,
     togglePopoutPin,
-    closePopoutById,
     processLogReport,
     RADIO_DEFAULT_CONFIG,
     BUILTIN_CN_HK_MUSIC_STATIONS,
@@ -108,13 +107,14 @@ import {
 // 安全加固：注册前校验扩展名 ∈ 音频白名单且大小 ≤ 50MB（对齐协议 maxSize），
 // 防止渲染进程借 save-playlist/save-favorites 把任意文件注册进白名单后经 musicfile:// 读取
 const APPROVED_AUDIO_MAX_SIZE = 50 * 1024 * 1024;
-async function approveAudioPath(filePath: string): Promise<void> {
+async function approveAudioPath(filePath: string, knownSize?: number): Promise<void> {
     try {
         const ext = path.extname(filePath).toLowerCase();
         if (!MUSIC_AUDIO_EXTENSIONS.includes(ext)) return; // 非音频扩展名拒绝
+        if (knownSize !== undefined && knownSize > APPROVED_AUDIO_MAX_SIZE) return; // 调用方已 stat，直接校验大小
         const real = await fs.promises.realpath(filePath);
-        const st = await fs.promises.stat(real);
-        if (!st.isFile() || st.size > APPROVED_AUDIO_MAX_SIZE) return;
+        const st = knownSize !== undefined ? null : await fs.promises.stat(real);
+        if (st && (!st.isFile() || st.size > APPROVED_AUDIO_MAX_SIZE)) return;
         approvedAudioPaths.add(real);
     } catch (_) { /* 文件不存在则忽略 */ }
 }
@@ -132,6 +132,35 @@ const RADIO_FALLBACKS = ['https://de1.api.radio-browser.info', 'https://nl1.api.
 function buildRadioTryUrls(cfg: any): string[] {
     const mirror = radioGetMirror(cfg);
     return [mirror, ...RADIO_FALLBACKS.filter(u => u !== mirror)];
+}
+
+/** 从 settings 合并出含默认值的 FM 配置（取代重复的 Object.assign 模式） */
+function getMergedRadioConfig(): any {
+    const s = loadSettings();
+    return Object.assign({}, RADIO_DEFAULT_CONFIG, (s.aiConfig && s.aiConfig.radioConfig) || {});
+}
+
+/** 归一化电台列表：radioNormalizeStation + filter(Boolean)（取代 7 处重复） */
+function normalizeStations(list: any[]): any[] {
+    return (Array.isArray(list) ? list : []).map(radioNormalizeStation).filter(Boolean);
+}
+
+/** 依次尝试镜像源抓取指定路径的电台列表，全部失败返回 null（取代 4 处重复 tryUrls 循环） */
+async function fetchRadioStations(cfg: any, pathAndQuery: string): Promise<any[] | null> {
+    const tryUrls = buildRadioTryUrls(cfg);
+    let lastErr: any = null;
+    for (const base of tryUrls) {
+        try {
+            const { data } = await radioHttpGet(base + pathAndQuery, cfg.timeout);
+            if (Array.isArray(data)) {
+                return normalizeStations(data);
+            }
+        } catch (e: any) {
+            lastErr = e;
+        }
+    }
+    if (lastErr) console.warn('[radio] 所有镜像源请求失败:', lastErr.message);
+    return null;
 }
 
 // M4 修复：校验目录是否已批准（已批准扫描目录或 app 音乐目录下）
@@ -343,14 +372,6 @@ export function registerIpcHandlers(): void {
         } catch (e: any) { console.warn('关闭当前小窗口失败:', e.message); }
     });
 
-    // 8. 按 ID 关闭小窗口
-    ipcMain.handle('popout:close-by-id', (_event: any, { noteId, type }: { noteId: string; type?: 'note' | 'todo' }) => {
-        try {
-            return closePopoutById(noteId, type);
-        } catch (e) {
-            return false;
-        }
-    });
     ipcMain.handle('popout:toggle-pin', (_event: any, { noteId, type }: { noteId: string; type: string }) => {
         try {
             return togglePopoutPin(noteId, type);
@@ -915,10 +936,6 @@ export function registerIpcHandlers(): void {
         return true;
     });
 
-    ipcMain.handle('lock:is-app-locked', () => {
-        return !!sharedState.isAppLocked;
-    });
-
     /* ---------- 开机启动（2 个 handle） ---------- */
     // 47. 设置开机启动
     ipcMain.handle('startup:set', tryWrap((_event: any, open: boolean) => {
@@ -1042,17 +1059,6 @@ export function registerIpcHandlers(): void {
         return readNoteHistory(noteId);
     });
 
-    // 54. 删除某条便签的所有历史快照
-    ipcMain.handle('note-history:clear', (_event: any, noteId: string) => {
-        try {
-            const fp = getHistoryFilePath(noteId);
-            if (fs.existsSync(fp)) fs.unlinkSync(fp);
-            return true;
-        } catch (_) {
-            return false;
-        }
-    });
-
     // 55. 切换某条历史快照的锁死状态
     ipcMain.handle('note-history:toggle-lock', tryWrap((_event: any, { noteId, ts }: { noteId: string; ts: number }) => {
         if (!noteId || ts === undefined || ts === null) return { success: false };
@@ -1158,38 +1164,7 @@ export function registerIpcHandlers(): void {
     });
 
     // 61.1 测试联网搜索连接
-    ipcMain.handle('ai:test-search', async (_event: any, searchConfig: any) => {
-        try {
-            assertPayloadSize(searchConfig, MAX_IPC_PAYLOAD_SIZE, 'ai:test-search 入参');
-            let apiKey = searchConfig?.apiKey || '';
-            if (isMaskedCred(apiKey)) {
-                const s = loadSettings();
-                const ws = s.aiConfig?.webSearch || {};
-                try {
-                    apiKey = await decryptSecret(ws.encryptedKey, 'Web Search API Key');
-                } catch (e: any) {
-                    throw new Error('无法读取已保存的搜索 API Key，请重新输入。');
-                }
-            }
-
-            const targetConfig = {
-                provider: searchConfig?.provider || 'builtin',
-                apiKey: apiKey,
-                apiUrl: searchConfig?.customUrl || searchConfig?.apiUrl || '',
-                maxResults: Number(searchConfig?.resultCount || searchConfig?.maxResults) || 3,
-                timeoutMs: 10000
-            };
-
-            const result = await searchManager.testConnection(targetConfig);
-            return result;
-        } catch (e: any) {
-            return {
-                ok: false,
-                message: e.message || '测试连接异常失败',
-                latencyMs: 0
-            };
-        }
-    });
+    // （已删除未使用的 ai:test-search handler —— 渲染层零调用，preload 对应 API 同步移除）
 
     // 62. 获取模型列表（带速率限制：每分钟最多 10 次）
     const fetchModelsRateLimiter = (() => {
@@ -1299,29 +1274,7 @@ export function registerIpcHandlers(): void {
     });
 
     // 65. 批量删除聊天图片
-    ipcMain.handle('chat:delete-images-batch', async (_event: any, fileNames: string[]) => {
-        if (!Array.isArray(fileNames) || fileNames.length === 0) return { success: true, deletedCount: 0, errors: [] as string[] };
-        const dir = getChatImagesDir();
-        let count = 0;
-        const errors: string[] = [];
-        for (const fileName of fileNames) {
-            if (!fileName) continue;
-            const filePath = path.normalize(path.join(dir, fileName));
-            if (filePath !== dir && !filePath.startsWith(dir + path.sep)) {
-                continue;
-            }
-            try {
-                await fs.promises.unlink(filePath);
-                count++;
-            } catch (e: any) {
-                if (e.code !== 'ENOENT') {
-                    errors.push(`${fileName}: ${e.message}`);
-                    console.warn('批量删除图片失败:', fileName, e.message);
-                }
-            }
-        }
-        return { success: errors.length === 0, deletedCount: count, errors };
-    });
+    // （已删除未使用的 chat:delete-images-batch handler —— 渲染层零调用，preload 对应 API 同步移除）
     ipcMain.handle('chat:delete-image', (_event: any, fileName: string) => {
         if (!fileName) return false;
         const dir = getChatImagesDir();
@@ -1382,24 +1335,25 @@ export function registerIpcHandlers(): void {
             const messages: any[] = [];
             if (cfg.prompt) messages.push({ role: 'system', content: cfg.prompt });
             if (Array.isArray(input.messages)) {
-                input.messages.forEach((m: any) => {
-                    if (!m || !m.role || !m.content) return;
-                    if (m.role !== 'user' && m.role !== 'assistant') return;
+                for (const m of input.messages) {
+                    if (!m || !m.role || !m.content) continue;
+                    if (m.role !== 'user' && m.role !== 'assistant') continue;
                     if (m.role === 'user' && Array.isArray(m.images) && m.images.length > 0) {
                         const parts: any[] = [{ type: 'text', text: m.content }];
-                        m.images.forEach((img: any) => {
-                            if (!img) return;
+                        // P3 修复：异步读取图片，避免 20MB 级图片同步读盘阻塞主进程
+                        for (const img of m.images) {
+                            if (!img) continue;
                             let url = img.dataUrl;
                             if (!url && img.path) {
-                                url = readChatImageAsDataUrl(img.path);
+                                url = await readChatImageAsDataUrl(img.path);
                             }
                             if (url) parts.push({ type: 'image_url', image_url: { url: url } });
-                        });
+                        }
                         messages.push({ role: 'user', content: parts });
                     } else {
                         messages.push({ role: m.role, content: m.content });
                     }
-                });
+                }
             }
             if (messages.length === 0 || (cfg.prompt && messages.length === 1)) {
                 throw new Error('没有可发送的对话内容');
@@ -1855,6 +1809,9 @@ export function registerIpcHandlers(): void {
         const doRecursive = recursive !== false;
         const MAX_FILES = 2000;
         const files: any[] = [];
+        // P3 修复：所有 approveAudioPath 并发执行（fs.promises 底层线程池排队），
+        // 避免 2000 文件逐个 await 串行 realpath 拖慢扫描
+        const pendingApprovals: Promise<void>[] = [];
         const walk = async (dir: string, depth: number) => {
             if (files.length >= MAX_FILES) return;
             let entries: fs.Dirent[];
@@ -1867,10 +1824,11 @@ export function registerIpcHandlers(): void {
                     const ext = path.extname(entry.name).toLowerCase();
                     if (MUSIC_AUDIO_EXTENSIONS.includes(ext)) {
                         try {
+                            // P3 修复：复用本次 stat 的 size，避免 approveAudioPath 内部再 stat 一次
                             const st = await fs.promises.stat(fullPath);
                             if (st.isFile()) {
                                 files.push({ filePath: fullPath, size: st.size });
-                                await approveAudioPath(fullPath); // C3 修复：注册到已批准集合
+                                pendingApprovals.push(approveAudioPath(fullPath, st.size)); // C3 修复：注册到已批准集合
                             }
                         } catch (e: any) { console.warn('获取文件信息失败:', e.message); }
                     }
@@ -1880,6 +1838,8 @@ export function registerIpcHandlers(): void {
             }
         };
         await walk(folderPath, 0);
+        // 等待所有并发注册完成（防止 handler 返回时 approvedAudioPaths 未就绪）
+        await Promise.all(pendingApprovals);
         return { success: true, files, truncated: files.length >= MAX_FILES };
     }));
 
@@ -2090,10 +2050,7 @@ export function registerIpcHandlers(): void {
     /* ---------- FM 收音机（10 个 handle） ---------- */
     // 81. 加载 FM 配置
     ipcMain.handle('radio:load-config', tryWrap(async () => {
-        const s = loadSettings();
-        const cfg = (s.aiConfig && s.aiConfig.radioConfig) || {};
-        const merged = Object.assign({}, RADIO_DEFAULT_CONFIG, cfg);
-        return { success: true, config: merged };
+        return { success: true, config: getMergedRadioConfig() };
     }));
 
     // 82. 保存 FM 配置
@@ -2121,8 +2078,6 @@ export function registerIpcHandlers(): void {
             }
             next.timeout = t;
         }
-        if (config.useProxy !== undefined) next.useProxy = !!config.useProxy;
-        if (config.defaultCountry !== undefined) next.defaultCountry = String(config.defaultCountry).slice(0, 64);
         if (config.customStations !== undefined) {
             if (!Array.isArray(config.customStations)) throw new Error('自定义电台列表格式无效');
             const mapped = config.customStations.slice(0, 500).map((st: any) => ({
@@ -2150,46 +2105,15 @@ export function registerIpcHandlers(): void {
     }));
 
     // 83. 获取 RadioBrowser 可用镜像列表
-    ipcMain.handle('radio:get-servers', tryWrap(async () => {
-        const s = loadSettings();
-        const cfg = Object.assign({}, RADIO_DEFAULT_CONFIG, (s.aiConfig && s.aiConfig.radioConfig) || {});
-        try {
-            const { data } = await radioHttpGet(cfg.apiBaseUrl + '/json/servers', cfg.timeout);
-            if (Array.isArray(data) && data.length > 0) {
-                const servers = data
-                    .map((it: any) => {
-                        const name = String(it.name || '').slice(0, 64);
-                        return { name, url: 'https://' + name + '.api.radio-browser.info' };
-                    })
-                    .filter((it: any) => it.name);
-                if (servers.length > 0) {
-                    return { success: true, servers };
-                }
-            }
-        } catch (e: any) {
-            console.error('[radio:get-servers] 获取镜像失败，回退默认:', e.message);
-        }
-        return {
-            success: true,
-            servers: [
-                { name: 'de1', url: 'https://de1.api.radio-browser.info' },
-                { name: 'nl1', url: 'https://nl1.api.radio-browser.info' },
-                { name: 'at1', url: 'https://at1.api.radio-browser.info' },
-                { name: 'all', url: 'https://all.api.radio-browser.info' }
-            ]
-        };
-    }));
+    // （已删除未使用的 radio:get-servers handler —— 渲染层零调用，preload 对应 API 同步移除）
 
     // 84. 获取热门电台（带 7 天本地缓存）
     ipcMain.handle('radio:get-topstations', tryWrap(async (_event: any, { limit }: { limit?: number } = {}) => {
-        const s = loadSettings();
-        const cfg = Object.assign({}, RADIO_DEFAULT_CONFIG, (s.aiConfig && s.aiConfig.radioConfig) || {});
+        const cfg = getMergedRadioConfig();
         const lim = Math.max(1, Math.min(200, Number(limit) || 50));
         const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
         const cachePath = getRadioCachePath();
-        const custom = Array.isArray(cfg.customStations)
-            ? cfg.customStations.map(radioNormalizeStation).filter(Boolean)
-            : [];
+        const custom = normalizeStations(cfg.customStations);
 
         let cached: any = null;
         try {
@@ -2204,25 +2128,10 @@ export function registerIpcHandlers(): void {
             return { success: true, stations: dedupStationsByUrl(cachedChinaHk, custom, cached.stations), fromCache: true };
         }
 
-        const tryUrls = buildRadioTryUrls(cfg);
-        const fetchFromApi = async (pathAndQuery: string) => {
-            let lastErr: any = null;
-            for (const base of tryUrls) {
-                try {
-                    const { data } = await radioHttpGet(base + pathAndQuery, cfg.timeout);
-                    if (Array.isArray(data)) {
-                        return data.map(radioNormalizeStation).filter(Boolean);
-                    }
-                } catch (e: any) {
-                    lastErr = e;
-                }
-            }
-            return null;
-        };
         const [topRes, cnRes, hkRes] = await Promise.all([
-            fetchFromApi('/json/stations/topvote/' + lim),
-            fetchFromApi('/json/stations/bycountryexact/China?limit=50'),
-            fetchFromApi('/json/stations/bycountryexact/Hong%20Kong?limit=30')
+            fetchRadioStations(cfg, '/json/stations/topvote/' + lim),
+            fetchRadioStations(cfg, '/json/stations/bycountryexact/China?limit=50'),
+            fetchRadioStations(cfg, '/json/stations/bycountryexact/Hong%20Kong?limit=30')
         ]);
         const topStations = topRes || [];
         const chinaHkStations = dedupStationsByUrl(cnRes || [], hkRes || []);
@@ -2247,15 +2156,12 @@ export function registerIpcHandlers(): void {
 
     // 85. 获取中文/香港音乐电台（精选 + RadioBrowser 筛选，带 7 天缓存）
     ipcMain.handle('radio:get-cnhk-music-stations', tryWrap(async (_event: any, { limit }: { limit?: number } = {}) => {
-        const s = loadSettings();
-        const cfg = Object.assign({}, RADIO_DEFAULT_CONFIG, (s.aiConfig && s.aiConfig.radioConfig) || {});
+        const cfg = getMergedRadioConfig();
         const lim = Math.max(1, Math.min(200, Number(limit) || 50));
         const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
         const cachePath = getRadioCachePath();
-        const custom = Array.isArray(cfg.customStations)
-            ? cfg.customStations.map(radioNormalizeStation).filter(Boolean)
-            : [];
-        const curated = BUILTIN_CN_HK_MUSIC_STATIONS.map(radioNormalizeStation).filter(Boolean);
+        const custom = normalizeStations(cfg.customStations);
+        const curated = normalizeStations(BUILTIN_CN_HK_MUSIC_STATIONS);
 
         let cached: any = null;
         try {
@@ -2270,9 +2176,9 @@ export function registerIpcHandlers(): void {
             return { success: true, stations: dedupStationsByUrl(curated, custom, cachedCnHk).slice(0, lim), fromCache: true };
         }
 
-        const radioCfg = Object.assign({}, cfg, { apiBaseUrl: RADIO_DEFAULT_CONFIG.apiBaseUrl });
-        const tryUrls = buildRadioTryUrls(radioCfg);
-        const rbStations = await fetchCnHkMusicFromRadioBrowser(cfg, tryUrls);
+        // 修复：此前构造 radioCfg（强制默认 apiBaseUrl）却把原 cfg 传给抓取函数，
+        // 用户在设置面板配置的自定义镜像地址在此通道完全不生效。统一使用同一 cfg。
+        const rbStations = await fetchCnHkMusicFromRadioBrowser(cfg, buildRadioTryUrls(cfg));
 
         if (rbStations === null) {
             if (cachedCnHk && cachedCnHk.length > 0) {
@@ -2297,8 +2203,7 @@ export function registerIpcHandlers(): void {
 
     // 86. 按来源获取电台
     ipcMain.handle('radio:get-stations-by-source', tryWrap(async (_event: any, { source, limit }: { source?: string; limit?: number } = {}) => {
-        const s = loadSettings();
-        const cfg = Object.assign({}, RADIO_DEFAULT_CONFIG, (s.aiConfig && s.aiConfig.radioConfig) || {});
+        const cfg = getMergedRadioConfig();
         const lim = Math.max(1, Math.min(200, Number(limit) || 100));
         const src = encodeURIComponent(String(source || 'topvote').slice(0, 32));
 
@@ -2323,34 +2228,17 @@ export function registerIpcHandlers(): void {
                 pathAndQuery = '/json/stations/topvote/' + lim;
         }
 
-        const tryUrls = buildRadioTryUrls(cfg);
-        let lastErr: any = null;
-        let stations: any[] | null = null;
-        for (const base of tryUrls) {
-            try {
-                const { data } = await radioHttpGet(base + pathAndQuery, cfg.timeout);
-                if (Array.isArray(data)) {
-                    stations = data.map(radioNormalizeStation).filter(Boolean);
-                    break;
-                }
-            } catch (e: any) {
-                lastErr = e;
-            }
-        }
-
-        const custom = Array.isArray(cfg.customStations)
-            ? cfg.customStations.map(radioNormalizeStation).filter(Boolean)
-            : [];
+        let stations = await fetchRadioStations(cfg, pathAndQuery);
+        const custom = normalizeStations(cfg.customStations);
         if (stations === null) {
-            return { success: true, stations: dedupStationsByUrl(custom), source: src, note: 'API 不可用: ' + (lastErr ? lastErr.message : 'unknown') };
+            return { success: true, stations: dedupStationsByUrl(custom), source: src, note: 'API 不可用' };
         }
         return { success: true, stations: dedupStationsByUrl(custom, stations), source: src };
     }));
 
     // 87. 搜索电台
     ipcMain.handle('radio:search', tryWrap(async (_event: any, { keyword, country, tag, limit }: { keyword?: string; country?: string; tag?: string; limit?: number } = {}) => {
-        const s = loadSettings();
-        const cfg = Object.assign({}, RADIO_DEFAULT_CONFIG, (s.aiConfig && s.aiConfig.radioConfig) || {});
+        const cfg = getMergedRadioConfig();
         const lim = Math.max(1, Math.min(200, Number(limit) || 50));
 
         let pathAndQuery: string;
@@ -2364,20 +2252,8 @@ export function registerIpcHandlers(): void {
             pathAndQuery = '/json/stations/topvote/' + lim;
         }
 
-        const tryUrls = buildRadioTryUrls(cfg);
-        let lastErr: any = null;
-        for (const base of tryUrls) {
-            try {
-                const { data } = await radioHttpGet(base + pathAndQuery, cfg.timeout);
-                if (Array.isArray(data)) {
-                    const stations = data.map(radioNormalizeStation).filter(Boolean);
-                    return { success: true, stations };
-                }
-            } catch (e: any) {
-                lastErr = e;
-            }
-        }
-        return { success: true, stations: [], note: '搜索失败: ' + (lastErr ? lastErr.message : 'unknown') };
+        const stations = await fetchRadioStations(cfg, pathAndQuery);
+        return { success: true, stations: stations || [], note: stations === null ? '搜索失败' : undefined };
     }));
 
     // 88. 加载收藏列表

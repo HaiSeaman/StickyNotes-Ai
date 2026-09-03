@@ -26,7 +26,8 @@ build-tmp/
 *.sw?
 
 # 临时系统与日志文件
-.reasonrix/
+.reasonix/
+tsup.config.bundled_*.mjs
 *.log
 .DS_Store
 Thumbs.db

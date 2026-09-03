@@ -291,34 +291,45 @@ function bindEvents(): void {
 
 // ============ 加载电台列表 ============
 async function loadStations(): Promise<void> {
+    // 数据源分流：cnhk-music 走独立 IPC（精选 + RadioBrowser 筛选）
+    await loadStationList(config.apiBaseUrl === 'cnhk-music' ? 'cnhk' : 'top');
+}
+
+// ============ 加载电台列表（top 热门 / cnhk 中文香港音乐）============
+// 两数据源共用同一套流程：缓存检测 → IPC 拉取 → 定位上次播放电台，仅 IPC 与文案不同
+async function loadStationList(source: 'top' | 'cnhk'): Promise<void> {
     if (!isOnline()) {
         updateStatus('网络未连接');
         return;
     }
-    // 数据源分流：cnhk-music 走独立 IPC（精选 + RadioBrowser 筛选）
-    if (config.apiBaseUrl === 'cnhk-music') {
-        return loadCnHkMusicStations();
-    }
+    const isCnhk = source === 'cnhk';
+    const sourceKey = isCnhk ? 'cnhk-music' : (config.apiBaseUrl || 'default');
+    const loadingText = isCnhk ? '加载中文/香港音乐电台...' : '加载电台列表...';
+    const failText = isCnhk ? '[Radio] 加载中文/香港音乐电台失败:' : '[Radio] 加载电台列表失败:';
     // 数据源切换检测：若缓存来自其他数据源，清空旧缓存
-    const currentSource = config.apiBaseUrl || 'default';
-    if (cachedDataSource && cachedDataSource !== currentSource) {
+    if (cachedDataSource && cachedDataSource !== sourceKey) {
         topStations = [];
     }
-    cachedDataSource = currentSource;
+    cachedDataSource = sourceKey;
     // 复用缓存：避免每次切换到 hot tab 都请求 API
     if (topStations.length === 0) {
-        updateStatus('加载电台列表...');
+        updateStatus(loadingText);
         try {
-            const result = await window.api.radioGetTopStations(100);
+            const result = isCnhk
+                ? await window.api.radioGetCnHkMusicStations(100)
+                : await window.api.radioGetTopStations(100);
             if (result.success && Array.isArray(result.stations)) {
                 topStations = result.stations;
+                if (result.note) {
+                    console.warn('[Radio]', result.note);
+                }
             } else {
                 handleError('电台列表加载失败');
                 return;
             }
         } catch (e) {
-            console.error('[Radio] 加载电台列表失败:', e);
-            reportLog('error', ['[Radio] 加载电台列表失败:', e]);
+            console.error(failText, e);
+            reportLog('error', [failText, e]);
             handleError('电台列表加载失败');
             return;
         }
@@ -350,70 +361,7 @@ async function loadStations(): Promise<void> {
         currentStation = null;
         currentIndex = -1;
     }
-    updateStatus(stations.length > 0 ? '请选择电台' : '暂无电台');
-}
-
-// ============ 加载中文/香港音乐电台（cnhk-music 数据源）============
-// 与 loadStations 类似，但调用独立 IPC：radio:get-cnhk-music-stations
-// 主进程会合并精选列表 + RadioBrowser 筛选结果（带 7 天缓存）
-async function loadCnHkMusicStations(): Promise<void> {
-    if (!isOnline()) {
-        updateStatus('网络未连接');
-        return;
-    }
-    // 数据源切换检测：若缓存来自其他数据源，清空旧缓存
-    if (cachedDataSource && cachedDataSource !== 'cnhk-music') {
-        topStations = [];
-    }
-    cachedDataSource = 'cnhk-music';
-    // 复用 topStations 缓存变量（与 hot tab 共用，切换数据源时清空）
-    if (topStations.length === 0) {
-        updateStatus('加载中文/香港音乐电台...');
-        try {
-            const result = await window.api.radioGetCnHkMusicStations(100);
-            if (result.success && Array.isArray(result.stations)) {
-                topStations = result.stations;
-                if (result.note) {
-                    console.warn('[Radio] CN/HK 音乐电台:', result.note);
-                }
-            } else {
-                handleError('电台列表加载失败');
-                return;
-            }
-        } catch (e) {
-            console.error('[Radio] 加载中文/香港音乐电台失败:', e);
-            reportLog('error', ['[Radio] 加载中文/香港音乐电台失败:', e]);
-            handleError('电台列表加载失败');
-            return;
-        }
-    }
-    stations = topStations;
-    consecutiveErrors = 0;   // 新列表加载成功，重置错误计数
-    renderStations(getDisplayStations());
-    // 尝试定位上次播放的电台（仅高亮，不自动播放）
-    if (config.lastStationUrl) {
-        const idx = findStationIndexByUrl(stations, config.lastStationUrl);
-        if (idx >= 0) {
-            currentIndex = idx;
-            currentStation = stations[idx];
-            updateFavButton();
-            updateStreamInfo(currentStation);
-            updateStationDisplay();
-            updateStatus((currentStation.name || '未知电台') + ' · 点击播放');
-            renderStations(getDisplayStations());
-            return;
-        }
-        // lastStationUrl 在新列表中找不到：清理脏状态
-        currentStation = null;
-        currentIndex = -1;
-        updateFavButton();
-        updateStreamInfo(null);
-        updateStationDisplay();
-    } else {
-        currentStation = null;
-        currentIndex = -1;
-    }
-    updateStatus(stations.length > 0 ? ('中文/香港音乐电台 · ' + stations.length + ' 个') : '暂无电台');
+    updateStatus(stations.length > 0 ? (isCnhk ? ('中文/香港音乐电台 · ' + stations.length + ' 个') : '请选择电台') : '暂无电台');
 }
 
 function loadFavoritesList(): void {
@@ -1074,7 +1022,7 @@ async function refreshAllStations(): Promise<void> {
 
 // ============ 刷新按钮：循环数据源 ============
 // 注意：此按钮用于在 RadioBrowser 数据源下循环切换 5 种子来源
-// 若当前是 cnhk-music 数据源，则直接调用 loadCnHkMusicStations 刷新（不循环切换）
+// 若当前是 cnhk-music 数据源，则直接调用 loadStationList('cnhk') 刷新（不循环切换）
 async function refreshStationsBySource(): Promise<void> {
     // 重入守卫：避免短时间内重复点击触发并发刷新
     if (isRefreshing) return;
@@ -1112,7 +1060,7 @@ async function refreshStationsBySource(): Promise<void> {
             topStations = [];
             cachedDataSource = '';
             updateStatus('刷新中文/香港音乐电台...');
-            await loadCnHkMusicStations();
+            await loadStationList('cnhk');
             return;
         }
         // RadioBrowser 数据源：递增索引（mod 5），循环切换 5 种子来源

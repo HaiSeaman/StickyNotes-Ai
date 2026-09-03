@@ -72,7 +72,6 @@ export const api = {
 
     saveAIConfig: makeInvoke('ai:save-config'),
     loadAIConfig: makeInvoke('ai:load-config'),
-    testSearch: makeInvoke('ai:test-search'),
     fetchModels: makeInvoke('ai:fetch-models'),
     generateContent: makeInvoke('ai:generate'),
     chat: makeInvoke('ai:chat'),
@@ -81,7 +80,6 @@ export const api = {
 
     saveChatImage: makeInvoke('chat:save-image'),
     deleteChatImage: makeInvoke('chat:delete-image'),
-    deleteChatImagesBatch: (paths: string[]) => ipcRenderer.invoke('chat:delete-images-batch', paths),
 
     saveImageConfig: makeInvoke('ai:save-image-config'),
     loadImageConfig: makeInvoke('ai:load-image-config'),
@@ -101,7 +99,6 @@ export const api = {
     hasLockPin: makeInvoke('lock:has-pin'),
     clearLockPin: makeInvoke('lock:clear-pin'),
     setAppLocked: makeInvoke('lock:set-app-locked'),
-    isAppLocked: makeInvoke('lock:is-app-locked'),
 
     setLaunchAtLogin: makeInvoke('startup:set'),
     getLaunchAtLogin: makeInvoke('startup:get'),
@@ -112,7 +109,6 @@ export const api = {
 
     saveNoteSnapshot: (noteId: string, content: string) => ipcRenderer.invoke('note-history:snapshot', { noteId, content }),
     listNoteHistory: makeInvoke('note-history:list'),
-    clearNoteHistory: makeInvoke('note-history:clear'),
     toggleHistoryLock: (noteId: string, ts: number) => ipcRenderer.invoke('note-history:toggle-lock', { noteId, ts }),
 
     popOutNote: (noteId: string, title: string, content: string) => ipcRenderer.invoke('note:popout', { noteId, title, content }),
@@ -121,7 +117,6 @@ export const api = {
     onPopoutNoteClose: makeListener('popout-note:closed'),
 
     popOutTodo: (noteId: string, title: string, todos: any[]) => ipcRenderer.invoke('todo:popout', { noteId, title, todos }),
-    closePopoutWindow: (noteId: string, type?: 'note' | 'todo') => ipcRenderer.invoke('popout:close-by-id', { noteId, type }),
     pushTodosToPopout: (noteId: string, todos: any[]) => ipcRenderer.send('popout-todo:push-from-main', { noteId, todos }),
     onPopoutTodoUpdate: makeListener('popout-todo:update'),
     onPopoutTodoClose: makeListener('popout-todo:closed'),
@@ -148,7 +143,6 @@ export const api = {
 
     radioLoadConfig: makeInvoke('radio:load-config'),
     radioSaveConfig: (config: any) => ipcRenderer.invoke('radio:save-config', config),
-    radioGetServers: makeInvoke('radio:get-servers'),
     radioGetTopStations: (limit: number) => ipcRenderer.invoke('radio:get-topstations', { limit }),
     radioGetStationsBySource: (opts: any) => ipcRenderer.invoke('radio:get-stations-by-source', opts),
     radioGetCnHkMusicStations: (limit: number) => ipcRenderer.invoke('radio:get-cnhk-music-stations', { limit }),

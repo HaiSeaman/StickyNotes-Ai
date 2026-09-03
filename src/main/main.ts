@@ -28,7 +28,7 @@ import * as logger from './lib/logger.js';
 import { webdavRequest, parseWebdavPropfindXml } from './services/syncService.js';
 
 // TS 工具模块
-import { serveLocalFile } from './lib/protocol.js';
+import { serveLocalFile, buildRangeStreamResponse } from './lib/protocol.js';
 import { streamDownloadToFile, safeFetch } from './lib/downloadUtils.js';
 import { extractHttpError } from './lib/httpUtils.js';
 import { getOverlayLoggerScript, getPopoutCommonCss, buildPopoutHtml } from './lib/popoutTemplate.js';
@@ -92,6 +92,8 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 /* ==================== 托盘/窗口图标生成 ==================== */
+// 调用点仅 createSunIcon(256)（窗口图标）与 createSunIcon(32)（托盘/任务栏叠加），
+// 图标源文件本身已是目标尺寸，无需 resize（原函数 resize 分支不可达，已移除）
 function createSunIcon(size: number): Electron.NativeImage {
     try {
         const assetsDir = path.join(__dirname, '..', 'assets');
@@ -100,7 +102,7 @@ function createSunIcon(size: number): Electron.NativeImage {
             : path.join(assetsDir, 'app-icon.png');
         const img = nativeImage.createFromPath(iconPath);
         if (img && !img.isEmpty()) {
-            return size === 256 || size === 32 ? img : img.resize({ width: size, height: size });
+            return img;
         }
     } catch (e: any) {
         console.warn('加载图标失败:', e.message);
@@ -321,11 +323,18 @@ function createWindow(): void {
     let windowShown = false;
     const showWindow = () => {
         if (windowShown || startHidden) return;
+        // P0 修复：窗口可能在 5s 兜底定时器触发前被关闭（mainWindow=null），
+        // 直接 mainWindow!.show() 会抛 TypeError 落进 uncaughtException 钩子导致 app.exit(1)
+        if (!mainWindow || mainWindow.isDestroyed()) return;
         windowShown = true;
-        mainWindow!.show();
+        mainWindow.show();
     };
     mainWindow.once('ready-to-show', showWindow);
-    setTimeout(showWindow, 5000);
+    const showFallbackTimer = setTimeout(showWindow, 5000);
+    mainWindow.on('closed', () => {
+        clearTimeout(showFallbackTimer);
+        mainWindow = null;
+    });
 
     try {
         const taskbarIcon = createSunIcon(32);
@@ -334,7 +343,6 @@ function createWindow(): void {
         }
     } catch (e: any) { console.warn('设置任务栏图标失败:', e.message); }
 
-    mainWindow.on('closed', () => { mainWindow = null; });
     mainWindow.on('focus', () => { quitRetryCount = 0; });
     bindWindowBoundsEvents(mainWindow);
 }
@@ -789,9 +797,10 @@ async function fetchWithErrorWrap(url: string, options?: any): Promise<Response>
 }
 
 // 备份时额外包含的子目录（相对 userData）：便签历史快照、聊天图片
+// 自动同步（定时触发）排除 chat-images 大目录，仅手动同步携带全量
 const BACKUP_SUBDIRS = ['note_history', 'chat-images'];
 
-async function getBackupFiles(): Promise<any[]> {
+async function getBackupFiles(excludeChatImages = false): Promise<any[]> {
     const dir = app.getPath('userData');
     const result: any[] = [];
     // 顶层 *.json
@@ -813,6 +822,7 @@ async function getBackupFiles(): Promise<any[]> {
     }
     // 白名单子目录（递归，保留相对路径作为 zip entry 名）
     for (const sub of BACKUP_SUBDIRS) {
+        if (excludeChatImages && sub === 'chat-images') continue;
         const subDir = path.join(dir, sub);
         if (!fs.existsSync(subDir)) continue;
         try {
@@ -846,12 +856,15 @@ async function collectDirFiles(absDir: string, relPrefix: string, out: any[], ma
     }
 }
 
-async function createBackupZip(): Promise<Buffer> {
+async function createBackupZip(excludeChatImages = false): Promise<Buffer> {
     const AdmZip = getAdmZip();
     const zip = new AdmZip();
-    const files = await getBackupFiles();
+    const files = await getBackupFiles(excludeChatImages);
     if (files.length === 0) throw new Error('没有可备份的数据文件');
     const MAX_SINGLE_FILE = 50 * 1024 * 1024; // 单文件 50MB 上限
+    // P3 修复：备份累计总上限 200MB，超限即中断（避免数据膨胀后全量读入内存导致峰值爆炸）
+    let totalBytes = 0;
+    let packedCount = 0;
     for (const f of files) {
         try {
             const stat = await fs.promises.stat(f.path);
@@ -859,8 +872,14 @@ async function createBackupZip(): Promise<Buffer> {
                 console.warn('跳过超大文件 ' + f.name + '（' + (stat.size/1024/1024).toFixed(1) + 'MB > 50MB 单文件上限）');
                 continue;
             }
+            if (totalBytes + stat.size > MAX_BACKUP_SIZE) {
+                console.warn('备份总大小达到上限 ' + (MAX_BACKUP_SIZE/1024/1024) + 'MB，停止收集');
+                break;
+            }
             const content = await fs.promises.readFile(f.path);
             zip.addFile(f.name, content);
+            totalBytes += stat.size;
+            packedCount++;
         } catch (e: any) {
             console.warn('跳过文件 ' + f.name + ':', e.message);
         }
@@ -868,7 +887,7 @@ async function createBackupZip(): Promise<Buffer> {
     const meta = {
         version: '1.0',
         createdAt: new Date().toISOString(),
-        fileCount: files.length,
+        fileCount: packedCount,  // 修复：此前用候选总数，跳过超大/超限文件后与实际不符
         appVersion: app.getVersion()
     };
     zip.addFile('_backup_meta.json', Buffer.from(JSON.stringify(meta, null, 2), 'utf8'));
@@ -1188,7 +1207,7 @@ export const providers: any = {
     }
 };
 
-export async function performSync(providerKey: string): Promise<{ provider: string, fileName: string, size: number, location: string }> {
+export async function performSync(providerKey: string, isAutoSync = false): Promise<{ provider: string, fileName: string, size: number, location: string }> {
     if (isSyncing) throw new Error('正在同步中，请稍后再试');
     isSyncing = true;
     let targetConfig: any = null;
@@ -1202,26 +1221,16 @@ export async function performSync(providerKey: string): Promise<{ provider: stri
         for (const k of provider.requiredFields) {
             if (!targetConfig[k]) throw new Error(`${provider.label} 配置不完整：缺少 ${k}`);
         }
-        const zipBuffer = await createBackupZip();
+        const zipBuffer = await createBackupZip(isAutoSync);
         const fileName = getBackupFileName();
         const result = await provider.upload(targetConfig, zipBuffer, fileName);
         return { provider: provider.label, fileName, size: zipBuffer.length, location: result.location };
     } finally {
         if (targetConfig) {
-            // P0 修复 C3：安全清理敏感字段
-            // 注意：JS 字符串不可变，这里使用 Buffer 来尽量清除内存中的凭据
+            // 释放敏感字段引用（JS 字符串不可变，内存中的副本只能依赖 GC，
+            // 此前用 Buffer 随机覆盖属无效操作——覆盖的是副本，原字符串不受影响，已移除）
             const sensitiveKeys = ['pass', 'secretKey', 'accessKey', 'user'] as const;
             for (const key of sensitiveKeys) {
-                const val = targetConfig[key];
-                if (val && typeof val === 'string') {
-                    // 尝试覆盖（最佳努力：字符串不可变，但可消除引用）
-                    try {
-                        // 用随机数据填充一个相同长度的 Buffer，然后尝试覆盖
-                        const buf = Buffer.from(val, 'utf-8');
-                        crypto.randomBytes(buf.length).copy(buf);
-                    } catch (_) {}
-                }
-                targetConfig[key] = '';
                 targetConfig[key] = null;
             }
         }
@@ -1241,7 +1250,7 @@ export function scheduleAutoSync(): void {
     const intervalMs = intervalMin * 60 * 1000;
     autoSyncTimer = setInterval(async () => {
         try {
-            const result = await performSync(syncConfig.autoSyncProvider);
+            const result = await performSync(syncConfig.autoSyncProvider, true);
             console.log('[自动同步] 成功:', result.fileName);
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('sync:auto-result', {
@@ -1442,19 +1451,20 @@ export function extFromDataUrl(dataUrl: string): string {
     return t;
 }
 
-export function readChatImageAsDataUrl(fileName: string): string | null {
+// P3 修复：异步读取（fs.promises），避免 20MB 级图片同步读盘阻塞主进程事件循环
+export async function readChatImageAsDataUrl(fileName: string): Promise<string | null> {
     if (!fileName) return null;
     const dir = getChatImagesDir();
     const filePath = path.normalize(path.join(dir, fileName));
     if (filePath !== dir && !filePath.startsWith(dir + path.sep)) return null;
     try {
-        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
-        const stat = fs.statSync(filePath);
+        const stat = await fs.promises.stat(filePath).catch(() => null);
+        if (!stat || !stat.isFile()) return null;
         if (stat.size > MAX_IMAGE_SIZE) {
             console.warn('聊天图片过大（' + (stat.size/1024/1024).toFixed(1) + 'MB > 20MB 上限），拒绝读取:', fileName);
             return null;
         }
-        const buffer = fs.readFileSync(filePath);
+        const buffer = await fs.promises.readFile(filePath);
         const ext = path.extname(fileName).toLowerCase();
         const mime = IMAGE_MIME_MAP[ext] || 'image/png';
         return 'data:' + mime + ';base64,' + buffer.toString('base64');
@@ -1679,12 +1689,16 @@ async function createVideoTask(requestUrl: string, headers: any, body: any): Pro
 async function pollVideoTask(queryUrl: string, queryHeaders: any, ac: AbortController): Promise<string> {
     const maxAttempts = 60;
     const intervalMs = 5000;
+    // P0 修复：abort 监听只注册一次（此前每轮循环 addEventListener 且从不移除，任务成功也残留最多 60 个监听）
+    const abortPromise = new Promise<never>((_, reject) => {
+        ac.signal.addEventListener('abort', () => reject(new Error('用户已取消视频生成')), { once: true });
+    });
     for (let i = 0; i < maxAttempts; i++) {
         if (ac.signal.aborted) throw new Error('用户已取消视频生成');
-        await new Promise<void>((resolve, reject) => {
-            const t = setTimeout(resolve, intervalMs);
-            ac.signal.addEventListener('abort', () => { clearTimeout(t); reject(new Error('用户已取消视频生成')); }, { once: true });
-        });
+        await Promise.race([
+            new Promise<void>(resolve => setTimeout(resolve, intervalMs)),
+            abortPromise
+        ]);
         if (ac.signal.aborted) throw new Error('用户已取消视频生成');
 
         let queryResp: Response | null = null;
@@ -1803,7 +1817,8 @@ export function sniffImageMime(buffer: Buffer, fallbackMime = 'image/png'): stri
     return fallbackMime;
 }
 
-export function sniffImageExt(buffer: Buffer): string {
+/** 由图片二进制推断扩展名（仅 main.ts 内部使用，非导出） */
+function sniffImageExt(buffer: Buffer): string {
     switch (sniffImageMime(buffer, '')) {
         case 'image/jpeg': return '.jpg';
         case 'image/webp': return '.webp';
@@ -1836,8 +1851,6 @@ export const MUSIC_MIME_MAP: any = {
 export const RADIO_DEFAULT_CONFIG: any = {
     apiBaseUrl: 'https://all.api.radio-browser.info',
     timeout: 10000,
-    useProxy: false,
-    defaultCountry: 'China',
     customStations: []
 };
 
@@ -2102,52 +2115,9 @@ if (!gotSingleInstanceLock) {
                 if (fileStat.size > maxSize) {
                     return new Response('Payload Too Large', { status: 413 });
                 }
-                // OPT-1 修复：流式 Response + Range 请求支持，替代 readFile 整文件读入内存
+                // OPT-1 修复：流式 Response + Range 请求支持（与 chatimg 协议共用 buildRangeStreamResponse），
                 // 使 Howler html5:true 真正生效，seek 时仅读取目标范围而非整个文件
-                const fileSize = fileStat.size;
-                // 修复：空文件提前返回 200 + Content-Length: 0，避免 createReadStream({start:0, end:-1}) 抛 ERR_OUT_OF_RANGE
-                if (fileSize === 0) {
-                    return new Response(null, {
-                        status: 200,
-                        headers: {
-                            'Content-Type': mimeMap[ext],
-                            'Content-Length': '0',
-                            'Accept-Ranges': 'bytes'
-                        }
-                    });
-                }
-                const rangeHeader = request.headers.get('range');
-                let start = 0, end = fileSize - 1, isPartial = false;
-                if (rangeHeader) {
-                    const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
-                    if (match) {
-                        start = match[1] ? parseInt(match[1], 10) : 0;
-                        end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
-                        if (start > end || start >= fileSize) {
-                            return new Response('Range Not Satisfiable', {
-                                status: 416,
-                                headers: { 'Content-Range': `bytes */${fileSize}` }
-                            });
-                        }
-                        end = Math.min(end, fileSize - 1);
-                        isPartial = true;
-                    }
-                }
-                const contentLength = end - start + 1;
-                const stream = fs.createReadStream(realPath, { start, end });
-                const headers: Record<string, string> = {
-                    'Content-Type': mimeMap[ext],
-                    'Content-Length': String(contentLength),
-                    'Accept-Ranges': 'bytes',
-                    'Cache-Control': 'max-age=3600'
-                };
-                if (isPartial) {
-                    headers['Content-Range'] = `bytes ${start}-${end}/${fileSize}`;
-                }
-                return new Response(stream as any, {
-                    status: isPartial ? 206 : 200,
-                    headers
-                });
+                return buildRangeStreamResponse(realPath, fileStat.size, mimeMap[ext], request.headers.get('range'));
             } catch (e: any) {
                 console.error('musicfile 协议读取失败:', e.message);
                 return new Response('Server Error', { status: 500 });

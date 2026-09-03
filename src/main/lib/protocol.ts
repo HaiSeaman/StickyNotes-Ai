@@ -14,6 +14,56 @@ interface ServeOptions {
     requireRealpath?: boolean;
 }
 
+/**
+ * 构造流式 Range 响应（chatimg/musicfile 协议共用）：
+ * - 空文件提前返回 200 + Content-Length: 0，避免 createReadStream({start:0,end:-1}) 抛 ERR_OUT_OF_RANGE
+ * - 解析 bytes=start-end 单段 Range，支持 206 部分响应与 416 范围错误
+ * 注意：本函数不处理多段 Range（逗号分隔）与后缀范围 bytes=-N，调用方按单段处理即可
+ */
+export function buildRangeStreamResponse(filePath: string, fileSize: number, contentType: string, rangeHeader: string | null | undefined): Response {
+    if (fileSize === 0) {
+        return new Response(null, {
+            status: 200,
+            headers: {
+                'Content-Type': contentType,
+                'Content-Length': '0',
+                'Accept-Ranges': 'bytes'
+            }
+        });
+    }
+    let start = 0, end = fileSize - 1, isPartial = false;
+    if (rangeHeader) {
+        const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
+        if (match) {
+            start = match[1] ? parseInt(match[1], 10) : 0;
+            end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+            if (start > end || start >= fileSize) {
+                return new Response('Range Not Satisfiable', {
+                    status: 416,
+                    headers: { 'Content-Range': `bytes */${fileSize}` }
+                });
+            }
+            end = Math.min(end, fileSize - 1);
+            isPartial = true;
+        }
+    }
+    const contentLength = end - start + 1;
+    const stream = fs.createReadStream(filePath, { start, end });
+    const headers: Record<string, string> = {
+        'Content-Type': contentType,
+        'Content-Length': String(contentLength),
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'max-age=3600'
+    };
+    if (isPartial) {
+        headers['Content-Range'] = `bytes ${start}-${end}/${fileSize}`;
+    }
+    return new Response(stream as any, {
+        status: isPartial ? 206 : 200,
+        headers
+    });
+}
+
 export async function serveLocalFile(
     requestUrl: string,
     dir: string,
@@ -71,49 +121,6 @@ export async function serveLocalFile(
     const ext = path.extname(fileName).toLowerCase();
     const contentType = mimeMap[ext] || defaultMime;
 
-    // OPT-2 修复：流式 Response + Range 请求支持，替代 readFile 整文件读入内存
-    const fileSize = fileStat.size;
-    // 修复：空文件提前返回 200 + Content-Length: 0，避免 createReadStream({start:0, end:-1}) 抛 ERR_OUT_OF_RANGE
-    if (fileSize === 0) {
-        return new Response(null, {
-            status: 200,
-            headers: {
-                'Content-Type': contentType,
-                'Content-Length': '0',
-                'Accept-Ranges': 'bytes'
-            }
-        });
-    }
-    const rangeHeader = request?.headers?.get('range');
-    let start = 0, end = fileSize - 1, isPartial = false;
-    if (rangeHeader) {
-        const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
-        if (match) {
-            start = match[1] ? parseInt(match[1], 10) : 0;
-            end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
-            if (start > end || start >= fileSize) {
-                return new Response('Range Not Satisfiable', {
-                    status: 416,
-                    headers: { 'Content-Range': `bytes */${fileSize}` }
-                });
-            }
-            end = Math.min(end, fileSize - 1);
-            isPartial = true;
-        }
-    }
-    const contentLength = end - start + 1;
-    const stream = fs.createReadStream(filePath, { start, end });
-    const headers: Record<string, string> = {
-        'Content-Type': contentType,
-        'Content-Length': String(contentLength),
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'max-age=3600'
-    };
-    if (isPartial) {
-        headers['Content-Range'] = `bytes ${start}-${end}/${fileSize}`;
-    }
-    return new Response(stream as any, {
-        status: isPartial ? 206 : 200,
-        headers
-    });
+    // OPT-2 修复：流式 Response + Range 请求支持，替代 readFile 整文件读入内存（与 musicfile 协议共用）
+    return buildRangeStreamResponse(filePath, fileStat.size, contentType, request?.headers?.get('range'));
 }

@@ -34,13 +34,6 @@ export class SearchManager {
   }
 
   /**
-   * 获取指定适配器
-   */
-  public getProvider(id: SearchProviderType): ISearchProvider | undefined {
-    return this.providers.get(id);
-  }
-
-  /**
    * 执行搜索并自动容灾降级
    * @param query 搜索关键词
    * @param config 搜索配置

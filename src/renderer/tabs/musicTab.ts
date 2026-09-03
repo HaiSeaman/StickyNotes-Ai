@@ -293,27 +293,33 @@ function bindEvents(): void {
 }
 
 // ============ 添加文件 / 文件夹 ============
+// 公共构建：去重（filePath）+ 逐文件取元数据 + 组装曲目对象（addFiles/addFolder/rescanSavedFolders 共用）
+async function buildTracks(files: any[]): Promise<any[]> {
+    const newTracks: any[] = [];
+    for (const f of files) {
+        // 去重：避免重复添加同一文件
+        if (playlist.some(t => t.filePath === f.filePath)) continue;
+        const meta = await fetchMetadata(f.filePath);
+        newTracks.push({
+            filePath: f.filePath,
+            title: meta.title,
+            artist: meta.artist,
+            album: meta.album,
+            duration: meta.duration,
+            coverPath: meta.coverPath,
+            size: f.size,
+            addedAt: Date.now(),
+            favorite: !!favoritesMap[f.filePath]
+        });
+    }
+    return newTracks;
+}
+
 async function addFiles(): Promise<void> {
     try {
         const result = await window.api.musicPickFiles();
         if (!result.success || !result.files.length) return;
-        const newTracks: any[] = [];
-        for (const f of result.files) {
-            // 去重：避免重复添加同一文件
-            if (playlist.some(t => t.filePath === f.filePath)) continue;
-            const meta = await fetchMetadata(f.filePath);
-            newTracks.push({
-                filePath: f.filePath,
-                title: meta.title,
-                artist: meta.artist,
-                album: meta.album,
-                duration: meta.duration,
-                coverPath: meta.coverPath,
-                size: f.size,
-                addedAt: Date.now(),
-                favorite: !!favoritesMap[f.filePath]
-            });
-        }
+        const newTracks = await buildTracks(result.files);
         playlist = playlist.concat(newTracks);
         rebuildFavoriteIndices();
         renderPlaylist();
@@ -334,22 +340,7 @@ async function addFolder(): Promise<void> {
         }
         const scan = await window.api.musicScanFolder(pick.folderPath, true);
         if (!scan.success || !scan.files.length) return;
-        const newTracks: any[] = [];
-        for (const f of scan.files) {
-            if (playlist.some(t => t.filePath === f.filePath)) continue;
-            const meta = await fetchMetadata(f.filePath);
-            newTracks.push({
-                filePath: f.filePath,
-                title: meta.title,
-                artist: meta.artist,
-                album: meta.album,
-                duration: meta.duration,
-                coverPath: meta.coverPath,
-                size: f.size,
-                addedAt: Date.now(),
-                favorite: !!favoritesMap[f.filePath]
-            });
-        }
+        const newTracks = await buildTracks(scan.files);
         playlist = playlist.concat(newTracks);
         rebuildFavoriteIndices();
         renderPlaylist();
@@ -373,22 +364,7 @@ async function rescanSavedFolders(quiet: boolean = false): Promise<void> {
         try {
             const scan = await window.api.musicScanFolder(folderPath, true);
             if (!scan || !scan.success || !scan.files || !scan.files.length) continue;
-            const newTracks: any[] = [];
-            for (const f of scan.files) {
-                if (playlist.some(t => t.filePath === f.filePath)) continue;
-                const meta = await fetchMetadata(f.filePath);
-                newTracks.push({
-                    filePath: f.filePath,
-                    title: meta.title,
-                    artist: meta.artist,
-                    album: meta.album,
-                    duration: meta.duration,
-                    coverPath: meta.coverPath,
-                    size: f.size,
-                    addedAt: Date.now(),
-                    favorite: !!favoritesMap[f.filePath]
-                });
-            }
+            const newTracks = await buildTracks(scan.files);
             if (newTracks.length > 0) {
                 addedCount += newTracks.length;
                 playlist = playlist.concat(newTracks);

@@ -1,15 +1,34 @@
 /**
  * security.ts 单元测试
- * 覆盖 SSRF 防护核心逻辑：IP 归一化、私网判定、URL 安全校验
+ * 覆盖 SSRF 防护核心逻辑：IP 归一化、私网判定、URL 安全校验（Async/DNS 版）
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+/**
+ * mock 整个 dns 模块：Async 版 SSRF 校验依赖 dns.promises.lookup。
+ * vi.hoisted 保证 mock 工厂执行时 lookupMock 已初始化（工厂先于 import 求值）。
+ */
+const lookupMock = vi.hoisted(() => vi.fn(() => Promise.resolve([{ address: '1.2.3.4', family: 4 }])));
+vi.mock('dns', () => ({
+  __esModule: true,
+  default: { promises: { lookup: lookupMock } },
+  promises: { lookup: lookupMock },
+}));
+
 import {
   isPrivateOrLoopbackHost,
-  isSafeExternalUrl,
+  isSafeExternalUrlAsync,
   validateAiBaseUrl,
   escapeHtmlFull,
-  isSafePublicStreamUrl,
+  isSafePublicStreamUrlAsync,
 } from '../src/main/lib/security';
+
+/** 让 DNS 解析返回指定 IP 列表 */
+function mockLookup(addresses: string[]) {
+  lookupMock.mockResolvedValue(
+    addresses.map((a) => ({ address: a, family: a.includes(':') ? 6 : 4 }))
+  );
+}
 
 describe('isPrivateOrLoopbackHost', () => {
   it('应识别 localhost 为内网', () => {
@@ -90,53 +109,74 @@ describe('isPrivateOrLoopbackHost', () => {
   });
 });
 
-describe('isSafeExternalUrl', () => {
-  it('应接受公网 HTTPS URL', () => {
-    expect(isSafeExternalUrl('https://example.com/api')).toBe(true);
+describe('isSafeExternalUrlAsync', () => {
+  beforeEach(() => {
+    mockLookup(['1.2.3.4']); // 默认公网 IP
   });
 
-  it('应拒绝 HTTP 协议（要求 HTTPS）', () => {
-    expect(isSafeExternalUrl('http://example.com')).toBe(false);
+  it('应接受公网 HTTPS URL（DNS 解析为公网 IP）', async () => {
+    mockLookup(['8.8.8.8']);
+    await expect(isSafeExternalUrlAsync('https://example.com/api')).resolves.toBe(true);
   });
 
-  it('应拒绝 file 协议', () => {
-    expect(isSafeExternalUrl('file:///etc/passwd')).toBe(false);
+  it('应拒绝 HTTP 协议（要求 HTTPS）', async () => {
+    await expect(isSafeExternalUrlAsync('http://example.com')).resolves.toBe(false);
   });
 
-  it('应拒绝内网 HTTPS URL', () => {
-    expect(isSafeExternalUrl('https://127.0.0.1/api')).toBe(false);
-    expect(isSafeExternalUrl('https://192.168.1.1/api')).toBe(false);
-    expect(isSafeExternalUrl('https://localhost/api')).toBe(false);
+  it('应拒绝 file 协议', async () => {
+    await expect(isSafeExternalUrlAsync('file:///etc/passwd')).resolves.toBe(false);
   });
 
-  it('应拒绝无效 URL', () => {
-    expect(isSafeExternalUrl('')).toBe(false);
-    expect(isSafeExternalUrl('not-a-url')).toBe(false);
-    expect(isSafeExternalUrl(null as any)).toBe(false);
+  it('应拒绝内网 HTTPS URL', async () => {
+    await expect(isSafeExternalUrlAsync('https://127.0.0.1/api')).resolves.toBe(false);
+    await expect(isSafeExternalUrlAsync('https://192.168.1.1/api')).resolves.toBe(false);
+    await expect(isSafeExternalUrlAsync('https://localhost/api')).resolves.toBe(false);
   });
 
-  it('应拒绝 javascript 协议', () => {
-    expect(isSafeExternalUrl('javascript:alert(1)')).toBe(false);
+  it('应拒绝 DNS 解析结果为内网地址（防 DNS rebinding）', async () => {
+    mockLookup(['10.0.0.1']);
+    await expect(isSafeExternalUrlAsync('https://example.com/api')).resolves.toBe(false);
+  });
+
+  it('应拒绝 DNS 解析失败（保守拒绝）', async () => {
+    lookupMock.mockRejectedValue(new Error('ENOTFOUND'));
+    await expect(isSafeExternalUrlAsync('https://example.com/api')).resolves.toBe(false);
+  });
+
+  it('应拒绝无效 URL', async () => {
+    await expect(isSafeExternalUrlAsync('')).resolves.toBe(false);
+    await expect(isSafeExternalUrlAsync('not-a-url')).resolves.toBe(false);
+    await expect(isSafeExternalUrlAsync(null as any)).resolves.toBe(false);
+  });
+
+  it('应拒绝 javascript 协议', async () => {
+    await expect(isSafeExternalUrlAsync('javascript:alert(1)')).resolves.toBe(false);
   });
 });
 
-describe('isSafePublicStreamUrl', () => {
-  it('应接受公网 HTTP URL（电台流需要 HTTP）', () => {
-    expect(isSafePublicStreamUrl('http://stream.example.com/live')).toBe(true);
+describe('isSafePublicStreamUrlAsync', () => {
+  beforeEach(() => {
+    mockLookup(['1.2.3.4']);
   });
 
-  it('应接受公网 HTTPS URL', () => {
-    expect(isSafePublicStreamUrl('https://stream.example.com/live')).toBe(true);
+  it('应接受公网 HTTP URL（电台流需要 HTTP）', async () => {
+    mockLookup(['8.8.8.8']);
+    await expect(isSafePublicStreamUrlAsync('http://stream.example.com/live')).resolves.toBe(true);
   });
 
-  it('应拒绝内网 HTTP URL', () => {
-    expect(isSafePublicStreamUrl('http://127.0.0.1/stream')).toBe(false);
-    expect(isSafePublicStreamUrl('http://10.0.0.1/stream')).toBe(false);
+  it('应接受公网 HTTPS URL', async () => {
+    mockLookup(['8.8.8.8']);
+    await expect(isSafePublicStreamUrlAsync('https://stream.example.com/live')).resolves.toBe(true);
   });
 
-  it('应拒绝非 HTTP/HTTPS 协议', () => {
-    expect(isSafePublicStreamUrl('ftp://example.com')).toBe(false);
-    expect(isSafePublicStreamUrl('file:///etc/passwd')).toBe(false);
+  it('应拒绝内网 HTTP URL', async () => {
+    await expect(isSafePublicStreamUrlAsync('http://127.0.0.1/stream')).resolves.toBe(false);
+    await expect(isSafePublicStreamUrlAsync('http://10.0.0.1/stream')).resolves.toBe(false);
+  });
+
+  it('应拒绝非 HTTP/HTTPS 协议', async () => {
+    await expect(isSafePublicStreamUrlAsync('ftp://example.com')).resolves.toBe(false);
+    await expect(isSafePublicStreamUrlAsync('file:///etc/passwd')).resolves.toBe(false);
   });
 });
 

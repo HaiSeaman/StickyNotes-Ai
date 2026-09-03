@@ -20,18 +20,8 @@ import * as RadioTab from './tabs/radioTab.js';
 // calendarTab.ts 导出 onTabActivated / onTabDeactivated（与原接口一致）
 // musicTab.ts 导出 initMusicTab（懒初始化入口）/ onMusicTabDeactivated
 // radioTab.ts 导出 initRadioTab（懒初始化入口）/ onRadioTabDeactivated
-const CalendarModule = {
-    onTabActivated: CalendarTab.onTabActivated,
-    onTabDeactivated: CalendarTab.onTabDeactivated
-};
-const MusicModule = {
-    onTabActivated: MusicTab.initMusicTab,
-    onTabDeactivated: MusicTab.onMusicTabDeactivated
-};
-const RadioModule = {
-    onTabActivated: RadioTab.initRadioTab,
-    onTabDeactivated: RadioTab.onRadioTabDeactivated
-};
+// 注：原 CalendarModule/MusicModule/RadioModule 三层包装对象仅为纯转发、无适配逻辑，
+// 已在死代码清理中移除，调用点直接引用各 tab 模块导出。
 
 /* ==================== DOM 引用 ==================== */
 // 通用泛型 DOM 选择工具函数，消除隐式 any 并提升静态类型安全
@@ -88,11 +78,16 @@ const lockMessage = $<HTMLElement>('lockMessage');
 const lockSubmitBtn = $<HTMLElement>('lockSubmitBtn');
 const lockExitBtn = $<HTMLElement>('lockExitBtn');
 const setPinOverlay = $<HTMLElement>('setPinOverlay');
+const setPinTitle = $<HTMLElement>('setPinTitle');
+const setPinCurrentInputs = $<HTMLElement>('setPinCurrentInputs');
+const setPinCurrentLabel = $<HTMLElement>('setPinCurrentLabel');
 const setPinInputs = $<HTMLElement>('setPinInputs');
 const setPinConfirmInputs = $<HTMLElement>('setPinConfirmInputs');
 const setPinMessage = $<HTMLElement>('setPinMessage');
 const setPinConfirmBtn = $<HTMLElement>('setPinConfirmBtn');
+const setPinClearBtn = $<HTMLElement>('setPinClearBtn');
 const setPinCancelBtn = $<HTMLElement>('setPinCancelBtn');
+const settingsLockBtn = $<HTMLElement>('settingsLockBtn');
 let isLocked = false;  // 当前是否处于锁定状态
 const settingsPaletteBtn = $<HTMLElement>('settingsPaletteBtn');  // 指向设置面板内的背景色按钮
 const palettePanel = $<HTMLElement>('palettePanel');
@@ -130,6 +125,7 @@ const createModelSelect = $<HTMLSelectElement>('createModelSelect');
 const createVideoDuration = $<HTMLSelectElement>('createVideoDuration');
 const createVideoRatio = $<HTMLSelectElement>('createVideoRatio');
 let createMode: string = 'image';  // 'image' 或 'video'
+let _videoGenerating = false;  // 视频生成进行中标记：生成中再次点击按钮 = 停止生成
 const browsePathBtn = $<HTMLElement>('browsePathBtn');
 const imgSavePath = $<HTMLInputElement>('imgSavePath');
 
@@ -1945,30 +1941,39 @@ function renderChatList(): void {
         item.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
         item.dataset.id = chat.id;
         item.textContent = chat.title || '新对话';
-        // 归档按钮（删除按钮左边，悬停显示，与便签列表卡片归档按钮一致）
+        // 归档/删除按钮（悬停显示，与便签列表一致）。事件通过 container 委托处理
         const archive = document.createElement('button');
         archive.className = 'chat-item-archive';
+        archive.dataset.action = 'archive-chat';
         archive.textContent = '📦';
         archive.title = '归档会话';
-        archive.addEventListener('click', (e: any) => {
-            e.stopPropagation();
-            archiveChat(chat.id);
-        });
         item.appendChild(archive);
         const del = document.createElement('button');
         del.className = 'chat-item-del';
+        del.dataset.action = 'delete-chat';
         del.textContent = '✕';
         del.title = '删除会话';
-        del.addEventListener('click', (e: any) => {
-            e.stopPropagation();
-            deleteChat(chat.id);
-        });
         item.appendChild(del);
-        item.addEventListener('click', () => switchChat(chat.id));
         frag.appendChild(item);
     });
     chatList.appendChild(frag);
 }
+
+// 事件委托：会话列表点击（归档/删除/切换），避免每次重渲染为每项绑定 3 个监听器
+chatList.addEventListener('click', (e: any) => {
+    const actionBtn = e.target.closest('[data-action]');
+    if (actionBtn) {
+        const action = actionBtn.dataset.action;
+        const item = actionBtn.closest('.chat-item');
+        if (!item || !item.dataset.id) return;
+        e.stopPropagation();
+        if (action === 'archive-chat') archiveChat(Number(item.dataset.id));
+        else if (action === 'delete-chat') deleteChat(Number(item.dataset.id));
+        return;
+    }
+    const item = e.target.closest('.chat-item');
+    if (item && item.dataset.id) switchChat(Number(item.dataset.id));
+});
 
 // 解析消息附件图片的显示 src：
 // 优先 dataUrl（旧版兼容，已迁移后会删除）；否则用 chatimg 协议从本地磁盘按需加载
@@ -2396,18 +2401,7 @@ function archiveChat(id: number): void {
 }
 
 // 永久删除会话时清理其引用的本地图片文件，避免磁盘堆积孤儿文件
-function getChatImagePaths(chat: any): string[] {
-    if (!chat || !Array.isArray(chat.messages)) return [];
-    const paths: string[] = [];
-    chat.messages.forEach((m: any) => {
-        if (m.role === "user" && Array.isArray(m.images)) {
-            m.images.forEach((img: any) => {
-                if (img && img.path) paths.push(img.path);
-            });
-        }
-    });
-    return paths;
-}
+// （getChatImagePaths 死函数已删除：实际清理逻辑在 cleanupChatImages 内联收集）
 
 function cleanupChatImages(chat: any): void {
     if (!chat || !Array.isArray(chat.messages)) return;
@@ -2469,7 +2463,6 @@ async function migrateChatImagesToDisk(): Promise<void> {
 // 思考模式开关状态
 let chatThinkingEnabled = false;
 let chatWebSearchEnabled = false;
-let currentChatSources: any[] = [];
 // 当前待发送的附件列表：[{name, path, isImage}]（图片落盘后只存 path，不持有 base64）
 let chatAttachmentsList: any[] = [];
 
@@ -3078,6 +3071,11 @@ function updateModelSelectLabels(imgCfg: any): void {
 }
 
 createGenBtn.addEventListener('click', async () => {
+    // 视频生成进行中：按钮作为"停止生成"使用，调用主进程中止通道
+    if (_videoGenerating) {
+        try { await window.api.abortVideo(); } catch (e: any) { console.warn('中止视频生成失败:', e.message); }
+        return;
+    }
     const p = createPrompt.value.trim();
     if (!p) {
         createPlaceholder.textContent = '请先输入提示词';
@@ -3088,11 +3086,12 @@ createGenBtn.addEventListener('click', async () => {
     }
     createGenBtn.disabled = true;
     createGenBtn.textContent = '生成中...';
-    createPlaceholder.textContent = createMode === 'video' ? '🎬 视频生成中，预计需要 1-5 分钟，请耐心等待...' : '🔄 生成中...';
+    createPlaceholder.textContent = createMode === 'video' ? '🎬 视频生成中，预计需要 1-5 分钟，请耐心等待...（再点一次可停止）' : '🔄 生成中...';
     createPlaceholder.style.display = 'block';
     createImage.style.display = 'none';
     createVideo.style.display = 'none';
     createCopyBtn.style.display = 'none';
+    if (createMode === 'video') _videoGenerating = true;
     try {
         const imgData = (uploadPreview.style.display !== 'none' && uploadPreviewImg.src && uploadPreviewImg.src.indexOf('data:') === 0) ? uploadPreviewImg.src : null;
         if (createMode === 'video') {
@@ -3134,6 +3133,7 @@ createGenBtn.addEventListener('click', async () => {
         createPlaceholder.textContent = '失败: ' + err.message;
         createPlaceholder.style.display = 'block';
     } finally {
+        _videoGenerating = false;
         createGenBtn.disabled = false;
         createGenBtn.innerHTML = ICONS.sparkle + '生成';
     }
@@ -3336,31 +3336,51 @@ function bindPinInputAutoJump(container: any): void {
 }
 
 bindPinInputAutoJump(lockPinInputs);
+bindPinInputAutoJump(setPinCurrentInputs);
 bindPinInputAutoJump(setPinInputs);
 bindPinInputAutoJump(setPinConfirmInputs);
 
 /**
- * 显示设置 PIN 弹窗
+ * 显示设置 PIN 弹窗（首次设置或修改）
+ * @param fromSettings 是否从设置面板进入（true=修改/清除模式，成功后不自动锁定）
  */
-function showSetPinDialog(): void {
+async function showSetPinDialog(fromSettings: boolean = false): Promise<void> {
+    let hasPin = false;
+    try { hasPin = await window.api.hasLockPin(); } catch (_) { hasPin = false; }
+
+    // 已设置过 PIN：显示「当前 PIN」验证组 + 清除按钮，标题改为修改模式
+    if (setPinCurrentInputs) setPinCurrentInputs.style.display = hasPin ? '' : 'none';
+    if (setPinCurrentLabel) setPinCurrentLabel.style.display = hasPin ? '' : 'none';
+    if (setPinClearBtn) setPinClearBtn.style.display = (hasPin && fromSettings) ? '' : 'none';
+    if (setPinTitle) setPinTitle.textContent = hasPin ? '修改软件锁 PIN' : '设置软件锁 PIN';
+    _pinDialogFromSettings = fromSettings;
+
+    clearPinInputsLocal(setPinCurrentInputs);
     clearPinInputsLocal(setPinInputs);
     clearPinInputsLocal(setPinConfirmInputs);
     setPinMessage.textContent = '';
     setPinOverlay.style.display = 'flex';
     setTimeout(() => {
-        const first = setPinInputs.querySelector<HTMLElement>('.lock-pin-box');
+        // 修改模式优先聚焦当前 PIN 输入
+        const target = (hasPin && fromSettings) ? setPinCurrentInputs : setPinInputs;
+        const first = target ? target.querySelector<HTMLElement>('.lock-pin-box') : null;
         if (first) first.focus();
     }, 50);
 }
+
+/** 记录 PIN 弹窗来源：true=设置面板（修改/清除），false=锁按钮（首次设置+锁定） */
+let _pinDialogFromSettings = false;
 
 /**
  * 关闭设置 PIN 弹窗
  */
 function hideSetPinDialog(): void {
     setPinOverlay.style.display = 'none';
+    clearPinInputsLocal(setPinCurrentInputs);
     clearPinInputsLocal(setPinInputs);
     clearPinInputsLocal(setPinConfirmInputs);
     setPinMessage.textContent = '';
+    _pinDialogFromSettings = false;
 }
 
 /**
@@ -3403,10 +3423,16 @@ lockBtn.addEventListener('click', async (e: any) => {
     }
 });
 
-// 设置 PIN 确认按钮
+// 设置/修改 PIN 确认按钮
 setPinConfirmBtn.addEventListener('click', async () => {
+    const currentPin = readPinInputs(setPinCurrentInputs);
     const pin1 = readPinInputs(setPinInputs);
     const pin2 = readPinInputs(setPinConfirmInputs);
+    if (_pinDialogFromSettings && !currentPin) {
+        setPinMessage.textContent = '请输入当前 PIN';
+        clearPinInputsLocal(setPinCurrentInputs);
+        return;
+    }
     if (!pin1) {
         setPinMessage.textContent = '请输入 4 位数字 PIN';
         clearPinInputsLocal(setPinInputs);
@@ -3418,14 +3444,41 @@ setPinConfirmBtn.addEventListener('click', async () => {
         clearPinInputsLocal(setPinConfirmInputs);
         return;
     }
-    const result = await window.api.setLockPin(pin1);
+    // 传 currentPin：主进程要求已设 PIN 时必须验证当前 PIN 才允许修改
+    const result = await window.api.setLockPin(pin1, currentPin || undefined);
     if (result && result.success) {
+        // 先缓存决策再隐藏（hideSetPinDialog 会重置 _pinDialogFromSettings）
+        const shouldLock = !_pinDialogFromSettings;
         hideSetPinDialog();
-        // 设置成功后立即锁定
-        lockApp();
+        // 仅锁按钮入口（首次设置）设置成功后立即锁定；设置面板修改/清除不锁定
+        if (shouldLock) lockApp();
     } else {
         setPinMessage.textContent = (result && result.message) || '设置失败';
     }
+});
+
+// 清除 PIN 按钮（设置面板入口、已设 PIN 时可见）
+setPinClearBtn.addEventListener('click', async () => {
+    const currentPin = readPinInputs(setPinCurrentInputs);
+    if (!currentPin) {
+        setPinMessage.textContent = '请输入当前 PIN 以清除';
+        clearPinInputsLocal(setPinCurrentInputs);
+        return;
+    }
+    const result = await window.api.clearLockPin(currentPin);
+    if (result && result.success) {
+        hideSetPinDialog();
+    } else {
+        setPinMessage.textContent = (result && result.message) || '清除失败';
+        clearPinInputsLocal(setPinCurrentInputs);
+    }
+});
+
+// 设置面板：软件锁 PIN 入口（修改/清除）
+settingsLockBtn.addEventListener('click', async (e: any) => {
+    e.stopPropagation();
+    closeAllPanels();
+    await showSetPinDialog(true);
 });
 
 // 设置 PIN 取消按钮
@@ -3567,12 +3620,10 @@ const fmSettingsPanel: any = $('fmSettingsPanel');
 const fmApiBaseUrl: any = $('fmApiBaseUrl');
 const fmApiBaseUrlCustom: any = $('fmApiBaseUrlCustom');
 const fmTimeout: any = $('fmTimeout');
-const fmDefaultCountry: any = $('fmDefaultCountry');
 const fmImportBtn: any = $('fmImportBtn');
 const fmImportHint: any = $('fmImportHint');
 const fmClearCacheBtn: any = $('fmClearCacheBtn');
 const fmResetBtn: any = $('fmResetBtn');
-const fmEnableProxy: any = $('fmEnableProxy');
 
 // 加载 FM 配置并填充表单
 async function loadFmConfigToForm(): Promise<void> {
@@ -3594,8 +3645,6 @@ async function loadFmConfigToForm(): Promise<void> {
         }
         showFmError('');   // 清除错误提示
         fmTimeout.value = cfg.timeout || 10000;
-        fmDefaultCountry.value = cfg.defaultCountry || 'China';
-        if (fmEnableProxy) fmEnableProxy.checked = !!cfg.useProxy;
         // 显示自定义电台导入状态
         const count = (cfg.customStations || []).length;
         fmImportHint.textContent = count > 0 ? `已导入 ${count} 个电台` : '未导入';
@@ -3619,9 +3668,7 @@ async function saveFmConfigFromForm(): Promise<boolean> {
     showFmError('');   // 清除错误提示
     const config = {
         apiBaseUrl,
-        timeout: parseInt(fmTimeout.value, 10) || 10000,
-        defaultCountry: fmDefaultCountry.value.trim() || 'China',
-        useProxy: fmEnableProxy ? fmEnableProxy.checked : false
+        timeout: parseInt(fmTimeout.value, 10) || 10000
     };
     try {
         const result = await window.api.radioSaveConfig(config);
@@ -3682,7 +3729,6 @@ function fmScheduleSave(): void {
     fmSaveTimer = setTimeout(saveFmConfigFromForm, 800);
 }
 if (fmTimeout) fmTimeout.addEventListener('change', fmScheduleSave);
-if (fmDefaultCountry) fmDefaultCountry.addEventListener('change', fmScheduleSave);
 // 自定义地址改用 input 事件 + 防抖，仅在值非空且符合 URL 格式时触发保存
 // 修复卡死 Bug：原逻辑用 change 事件，用户输入完成离开焦点后才触发；现在改为实时输入即可保存
 if (fmApiBaseUrlCustom) {
@@ -3694,7 +3740,6 @@ if (fmApiBaseUrlCustom) {
         }
     });
 }
-if (fmEnableProxy) fmEnableProxy.addEventListener('change', fmScheduleSave);
 
 // 导入自定义电台 JSON 文件
 if (fmImportBtn) {
@@ -3750,9 +3795,7 @@ if (fmResetBtn) {
     fmResetBtn.addEventListener('click', async () => {
         const defaults = {
             apiBaseUrl: 'https://all.api.radio-browser.info',
-            timeout: 10000,
-            defaultCountry: 'China',
-            useProxy: false
+            timeout: 10000
         };
         await window.api.radioSaveConfig(defaults);
         await loadFmConfigToForm();
@@ -4976,16 +5019,16 @@ tabs.forEach((tab: any) => {
             saveNotesToDisk();
         }
         // 离开日历 tab 时通知模块清理 resize 防抖计时器，避免离开后还触发一次重绘
-        if (currentTab === 'calendar' && target !== 'calendar' && CalendarModule && CalendarModule.onTabDeactivated) {
-            CalendarModule.onTabDeactivated();
+        if (currentTab === 'calendar' && target !== 'calendar') {
+            CalendarTab.onTabDeactivated();
         }
         // 离开音乐 tab 时通知模块（后台播放继续，无需暂停）
-        if (currentTab === 'music' && target !== 'music' && MusicModule && MusicModule.onTabDeactivated) {
-            MusicModule.onTabDeactivated();
+        if (currentTab === 'music' && target !== 'music') {
+            MusicTab.onMusicTabDeactivated();
         }
         // 离开音乐 tab 时也通知 FM 收音机模块（后台播放继续）
-        if (currentTab === 'music' && target !== 'music' && RadioModule && RadioModule.onTabDeactivated) {
-            RadioModule.onTabDeactivated();
+        if (currentTab === 'music' && target !== 'music') {
+            RadioTab.onRadioTabDeactivated();
         }
         currentTab = target;
         tabs.forEach((t: any) => t.classList.remove('active'));
@@ -5013,12 +5056,12 @@ tabs.forEach((tab: any) => {
             }
         } else if (target === 'calendar') {
             // 激活日历时刷新视图（便签可能有更新）
-            if (CalendarModule) CalendarModule.onTabActivated();
+            CalendarTab.onTabActivated();
         } else if (target === 'music') {
             // 激活音乐 tab 时通知模块（后台播放继续，无需特殊处理）
-            if (MusicModule && MusicModule.onTabActivated) MusicModule.onTabActivated();
+            MusicTab.initMusicTab();
             // 同时通知 FM 收音机模块
-            if (RadioModule && RadioModule.onTabActivated) RadioModule.onTabActivated();
+            RadioTab.initRadioTab();
         }
     });
 });
@@ -5028,10 +5071,16 @@ tabs.forEach((tab: any) => {
 /* ==================== 图片放大模态弹窗 ====================
  * 替代 window.open（被 setWindowOpenHandler 拦截），使用应用内 overlay 展示放大图片
  */
+// 模块级：全局唯一的放大弹窗 ESC 监听（每次打开前先移除旧的，防监听器累积泄漏）
+let imageZoomEscHandler: ((e: KeyboardEvent) => void) | null = null;
 function showImageZoomModal(src: string): void {
-    // 移除已存在的模态（防重复）
+    // 移除已存在的模态 + 旧 keydown 监听（防重复/防泄漏）
     const existing = document.getElementById('imageZoomOverlay');
     if (existing) existing.remove();
+    if (imageZoomEscHandler) {
+        document.removeEventListener('keydown', imageZoomEscHandler);
+        imageZoomEscHandler = null;
+    }
 
     const overlay = document.createElement('div');
     overlay.id = 'imageZoomOverlay';
@@ -5052,13 +5101,16 @@ function showImageZoomModal(src: string): void {
     const dismiss = () => {
         overlay.remove();
         // 修复：无论以何种方式关闭（ESC/遮罩/关闭按钮）都移除 keydown 监听，防监听器累积泄漏
-        document.removeEventListener('keydown', escHandler);
+        if (imageZoomEscHandler) {
+            document.removeEventListener('keydown', imageZoomEscHandler);
+            imageZoomEscHandler = null;
+        }
     };
-    const escHandler = function (e: KeyboardEvent) {
+    imageZoomEscHandler = function (e: KeyboardEvent) {
         if (e.key === 'Escape') dismiss();
     };
     overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target === closeBtn) dismiss(); });
-    document.addEventListener('keydown', escHandler);
+    document.addEventListener('keydown', imageZoomEscHandler);
 
     document.body.appendChild(overlay);
 }
@@ -5711,12 +5763,8 @@ async function initWindowProps(): Promise<void> {
 }
 
 function initNoteUI(): void {
-    if (notes.length === 0) { createNote(); return; }
-    currentNoteId = notes[0].id;
-    renderNoteList();
-    renderEditor();
-    renderTodoList();
-
+    // 事件绑定必须先于“无便签自动新建”分支执行，否则首次启动（空便签库）
+    // 直接 return 会导致输入/新建/保存的所有事件监听全部不绑定（严重 bug）
     noteInput.addEventListener('input', handleContentInput);
     todoInput.addEventListener('keydown', (e: any) => {
         if (e.key === 'Enter') { e.preventDefault(); addTodo(); }
@@ -5726,13 +5774,15 @@ function initNoteUI(): void {
     noteInput.addEventListener('keydown', (e: any) => {
         if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); saveContentAndFlush(); }
     });
-    if (getCurrentNote()) noteInput.focus();
-
     moveContentPanelTo(notesContentSlot);
-    if (noteInput) {
-        noteInput.removeAttribute('disabled');
-        noteInput.disabled = false;
-    }
+    if (noteInput) noteInput.disabled = false;
+
+    if (notes.length === 0) { createNote(); return; }
+    currentNoteId = notes[0].id;
+    renderNoteList();
+    renderEditor();
+    renderTodoList();
+    if (getCurrentNote()) noteInput.focus();
 }
 
 function initChatAndAi(): void {

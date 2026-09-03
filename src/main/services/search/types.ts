@@ -55,13 +55,3 @@ export interface ISearchProvider {
   /** 连通性与 Key 有效性测试 */
   testConnection(config: WebSearchConfig): Promise<{ success: boolean; message: string; latencyMs?: number }>;
 }
-
-/**
- * 搜索流式事件类型 (用于 IPC 推送)
- */
-export interface SearchStatusChunk {
-  type: 'searching' | 'sources' | 'search_error';
-  query?: string;
-  sources?: SearchResult[];
-  error?: string;
-}
