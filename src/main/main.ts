@@ -890,6 +890,10 @@ async function createBackupZip(excludeChatImages = false): Promise<Buffer> {
         fileCount: packedCount,  // 修复：此前用候选总数，跳过超大/超限文件后与实际不符
         appVersion: app.getVersion()
     };
+    // 边界保护：全部文件被跳过（单文件>50MB 或超 200MB 总限）时拒绝生成仅含 meta 的空备份
+    if (packedCount === 0) {
+        throw new Error('所有文件均超过备份大小上限（单文件 50MB / 总计 200MB），生成备份失败');
+    }
     zip.addFile('_backup_meta.json', Buffer.from(JSON.stringify(meta, null, 2), 'utf8'));
     return zip.toBuffer();
 }
@@ -1207,7 +1211,7 @@ export const providers: any = {
     }
 };
 
-export async function performSync(providerKey: string, isAutoSync = false): Promise<{ provider: string, fileName: string, size: number, location: string }> {
+export async function performSync(providerKey: string, excludeChatImages = false): Promise<{ provider: string, fileName: string, size: number, location: string }> {
     if (isSyncing) throw new Error('正在同步中，请稍后再试');
     isSyncing = true;
     let targetConfig: any = null;
@@ -1221,7 +1225,7 @@ export async function performSync(providerKey: string, isAutoSync = false): Prom
         for (const k of provider.requiredFields) {
             if (!targetConfig[k]) throw new Error(`${provider.label} 配置不完整：缺少 ${k}`);
         }
-        const zipBuffer = await createBackupZip(isAutoSync);
+        const zipBuffer = await createBackupZip(excludeChatImages);
         const fileName = getBackupFileName();
         const result = await provider.upload(targetConfig, zipBuffer, fileName);
         return { provider: provider.label, fileName, size: zipBuffer.length, location: result.location };
@@ -1250,6 +1254,7 @@ export function scheduleAutoSync(): void {
     const intervalMs = intervalMin * 60 * 1000;
     autoSyncTimer = setInterval(async () => {
         try {
+            // 自动同步触发：排除 chat-images 大目录（手动同步仍全量），见 scheduleAutoSync 内联调用
             const result = await performSync(syncConfig.autoSyncProvider, true);
             console.log('[自动同步] 成功:', result.fileName);
             if (mainWindow && !mainWindow.isDestroyed()) {
@@ -2191,16 +2196,3 @@ app.on('will-quit', () => {
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
 });
-
-
-
-export function closePopoutById(noteId: string, type: 'note' | 'todo' = 'note'): boolean {
-    const map = type === 'todo' ? todoPopoutWindows : popoutWindows;
-    const win = map.get(String(noteId));
-    if (win && !win.isDestroyed()) {
-        win.close();
-        map.delete(String(noteId));
-        return true;
-    }
-    return false;
-}

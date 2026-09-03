@@ -3612,7 +3612,7 @@ fontSizeResetBtn.addEventListener('click', () => {
 
 /* ==================== FM 收音机设置面板（P5）====================
  * 存储在 settings.aiConfig.radioConfig（P0 已实现主进程 IPC）
- * 字段：apiBaseUrl / timeout / defaultCountry / customStations
+ * 字段：apiBaseUrl / timeout / customStations（defaultCountry/useProxy 假开关已随死配置清理移除）
  * 自定义电台 JSON 格式：{ version:1, stations:[{name,url,favicon,country,tags}] }
  */
 const settingsFmBtn: any = $('settingsFmBtn');

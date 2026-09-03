@@ -31,13 +31,22 @@ export function withFetchSignal(
 ): { signal: AbortSignal; cleanup: () => void } {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let onOuterAbort: (() => void) | null = null;
   if (signal) {
-    if (signal.aborted) controller.abort();
-    else signal.addEventListener('abort', () => controller.abort(), { once: true });
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      onOuterAbort = () => controller.abort();
+      signal.addEventListener('abort', onOuterAbort, { once: true });
+    }
   }
   return {
     signal: controller.signal,
-    cleanup: () => clearTimeout(timer),
+    cleanup: () => {
+      clearTimeout(timer);
+      // 修复：移除外部 signal 的 abort 监听，避免同一 signal 复用多次请求时监听器累积（cleanup 字样与行为一致）
+      if (signal && onOuterAbort) signal.removeEventListener('abort', onOuterAbort);
+    },
   };
 }
 

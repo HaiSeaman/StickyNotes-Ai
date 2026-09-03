@@ -146,7 +146,7 @@ function normalizeStations(list: any[]): any[] {
 }
 
 /** 依次尝试镜像源抓取指定路径的电台列表，全部失败返回 null（取代 4 处重复 tryUrls 循环） */
-async function fetchRadioStations(cfg: any, pathAndQuery: string): Promise<any[] | null> {
+async function fetchRadioStations(cfg: any, pathAndQuery: string, lastErrRef?: { error?: string }): Promise<any[] | null> {
     const tryUrls = buildRadioTryUrls(cfg);
     let lastErr: any = null;
     for (const base of tryUrls) {
@@ -159,7 +159,11 @@ async function fetchRadioStations(cfg: any, pathAndQuery: string): Promise<any[]
             lastErr = e;
         }
     }
-    if (lastErr) console.warn('[radio] 所有镜像源请求失败:', lastErr.message);
+    if (lastErr) {
+        console.warn('[radio] 所有镜像源请求失败:', lastErr.message);
+        // 导出最后错误供调用方保留排障信息（如 radio:search 的 note 文案）
+        if (lastErrRef) lastErrRef.error = lastErr.message;
+    }
     return null;
 }
 
@@ -2252,8 +2256,9 @@ export function registerIpcHandlers(): void {
             pathAndQuery = '/json/stations/topvote/' + lim;
         }
 
-        const stations = await fetchRadioStations(cfg, pathAndQuery);
-        return { success: true, stations: stations || [], note: stations === null ? '搜索失败' : undefined };
+        const searchErr: { error?: string } = {};
+        const stations = await fetchRadioStations(cfg, pathAndQuery, searchErr);
+        return { success: true, stations: stations || [], note: stations === null ? ('搜索失败' + (searchErr.error ? ': ' + searchErr.error : '')) : undefined };
     }));
 
     // 88. 加载收藏列表
