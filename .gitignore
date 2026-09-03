@@ -9,6 +9,7 @@ pnpm-debug.log*
 dist/
 dist-renderer/
 dist-app/
+dist-installers/
 build-tmp/
 *.exe
 *.msi

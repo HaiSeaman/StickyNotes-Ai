@@ -1,0 +1,43 @@
+# electron-builder 打包配置（v2.9）
+appId: com.jsson.stickynotes
+productName: 便签
+directories:
+  output: dist-installers
+  buildResources: build
+files:
+  - dist/**/*
+  - dist-renderer/**/*
+  - package.json
+  - node_modules/@aws-sdk/**
+  - node_modules/adm-zip/**
+  - node_modules/dompurify/**
+  - node_modules/howler/**
+  - node_modules/marked/**
+  - node_modules/music-metadata/**
+  - "!node_modules/@types/**"
+  - "!node_modules/electron/**"
+  - "!node_modules/tsup/**"
+  - "!node_modules/vite/**"
+  - "!node_modules/vitest/**"
+  - "!node_modules/typescript/**"
+  - "!node_modules/@electron/**"
+  - "!node_modules/.cache/**"
+asar: true
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+    - portable
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 便签
+  artifactName: 便签-Setup-${version}.${ext}
+  uninstallDisplayName: 便签 v${version}
+portable:
+  artifactName: 便签-Portable-${version}.${ext}
+electronDownload:
+  cache: "C:/Users/xi/AppData/Local/electron/Cache"
